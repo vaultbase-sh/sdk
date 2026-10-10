@@ -16,7 +16,7 @@
   <a href="https://www.npmjs.com/package/@vaultbase/sdk"><img alt="npm downloads" src="https://img.shields.io/npm/dm/%40vaultbase%2Fsdk?style=flat-square&color=1b1a1a"></a>
   <img alt="TypeScript types included" src="https://img.shields.io/npm/types/@vaultbase/sdk?style=flat-square&color=1b1a1a">
   <img alt="Node 18+" src="https://img.shields.io/node/v/%40vaultbase%2Fsdk?style=flat-square&color=1b1a1a">
-  <a href="LICENSE"><img alt="MIT license" src="https://img.shields.io/npm/l/%40vaultbase%2Fsdk?style=flat-square&color=1b1a1a"></a>
+  <a href="https://github.com/vaultbase-sh/sdk/blob/master/LICENSE"><img alt="MIT license" src="https://img.shields.io/npm/l/%40vaultbase%2Fsdk?style=flat-square&color=1b1a1a"></a>
 </p>
 
 <p align="center">
