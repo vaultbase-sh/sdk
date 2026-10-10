@@ -99,6 +99,36 @@ export class CollectionAuth<R = AnyRecord> {
     });
   }
 
+  /** Email a confirmation link to `newEmail` (signed-in user; server 0.16+). */
+  async requestEmailChange(newEmail: string): Promise<{ sent: boolean }> {
+    return await this.client.request(`/api/v1/auth/${enc(this.collection)}/request-email-change`, {
+      method: "POST",
+      body: { newEmail },
+    });
+  }
+
+  /**
+   * Apply the change with the link's token and the current password. Every
+   * existing session ends, this one included; sign in again with the new email.
+   */
+  async confirmEmailChange(token: string, password: string): Promise<{ changed: boolean; email: string }> {
+    const res = await this.client.request<{ changed: boolean; email: string }>(
+      `/api/v1/auth/${enc(this.collection)}/confirm-email-change`,
+      { method: "POST", body: { token, password }, skipAuth: true },
+    );
+    this.client.authStore.set(null);
+    return res;
+  }
+
+  /** Set a password from an invitation link; also verifies the email (server 0.16+). */
+  async acceptInvite(token: string, password: string): Promise<{ accepted: boolean }> {
+    return await this.client.request(`/api/v1/auth/${enc(this.collection)}/accept-invite`, {
+      method: "POST",
+      body: { token, password },
+      skipAuth: true,
+    });
+  }
+
   async otpRequest(email: string): Promise<{ sent: boolean }> {
     return await this.client.request(`/api/v1/auth/${enc(this.collection)}/otp/request`, {
       method: "POST",
@@ -242,6 +272,14 @@ export class AdminAuth {
 
   async me(): Promise<{ id: string; email: string; aud: "admin"; exp?: number }> {
     return await this.client.request("/api/v1/admin/auth/me");
+  }
+
+  /** Create a user without a password and email them an invitation link (server 0.16+). */
+  async invite(collection: string, email: string, data: Record<string, unknown> = {}): Promise<{ id: string; email: string }> {
+    return await this.client.request(`/api/v1/admin/users/${enc(collection)}/invite`, {
+      method: "POST",
+      body: { email, data },
+    });
   }
 
   async impersonate<R = AnyRecord>(collection: string, userId: string): Promise<LoginResult<R> & { impersonated_by: string }> {

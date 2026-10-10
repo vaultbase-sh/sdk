@@ -157,3 +157,28 @@ describe("Collection.aggregate", () => {
     expect(u.searchParams.get("limit")).toBe("5");
   });
 });
+
+describe("account flows", () => {
+  it("hits the email change, invite and accept endpoints", async () => {
+    const { CollectionAuth, AdminAuth } = await import("../src/auth/flows.ts");
+    const calls: Array<{ url: string; body: unknown }> = [];
+    const c = makeClient(async (req) => {
+      calls.push({ url: new URL(req.url).pathname, body: await req.json().catch(() => null) });
+      return new Response(JSON.stringify({ data: { ok: true } }), { headers: { "content-type": "application/json" } });
+    });
+    c.authStore.set({ token: "aaa.eyJleHAiOjk5OTk5OTk5OTl9.bbb", record: null });
+    const users = new CollectionAuth(c, "users");
+    await users.requestEmailChange("new@x.com");
+    await users.confirmEmailChange("tok", "pw");
+    expect(c.authStore.get()).toBeNull();
+    await users.acceptInvite("tok2", "pw2");
+    await new AdminAuth(c).invite("users", "a@x.com", { name: "A" });
+    expect(calls.map((x) => x.url)).toEqual([
+      "/api/v1/auth/users/request-email-change",
+      "/api/v1/auth/users/confirm-email-change",
+      "/api/v1/auth/users/accept-invite",
+      "/api/v1/admin/users/users/invite",
+    ]);
+    expect(calls[3]!.body).toEqual({ email: "a@x.com", data: { name: "A" } });
+  });
+});
