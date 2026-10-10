@@ -1,4 +1,31 @@
-# @vaultbase/sdk
+<p align="center">
+  <a href="https://vaultbase.dev">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/vaultbase-sh/vaultbase/main/assets/vaultbase-wordmark.svg">
+      <img src="https://raw.githubusercontent.com/vaultbase-sh/vaultbase/main/assets/vaultbase-wordmark-light.svg" alt="Vaultbase" width="300">
+    </picture>
+  </a>
+</p>
+
+<h3 align="center"><code>@vaultbase/sdk</code></h3>
+
+<p align="center">Official TypeScript SDK for Vaultbase</p>
+
+<p align="center">
+  <a href="https://www.npmjs.com/package/@vaultbase/sdk"><img alt="npm version" src="https://img.shields.io/npm/v/%40vaultbase%2Fsdk?style=flat-square&color=e85a4f"></a>
+  <a href="https://www.npmjs.com/package/@vaultbase/sdk"><img alt="npm downloads" src="https://img.shields.io/npm/dm/%40vaultbase%2Fsdk?style=flat-square&color=1b1a1a"></a>
+  <a href="https://bundlephobia.com/package/@vaultbase/sdk"><img alt="Minzipped size" src="https://img.shields.io/bundlephobia/minzip/@vaultbase/sdk?style=flat-square&color=1b1a1a&label=minzip"></a>
+  <img alt="TypeScript types included" src="https://img.shields.io/npm/types/@vaultbase/sdk?style=flat-square&color=1b1a1a">
+  <img alt="Node 18+" src="https://img.shields.io/node/v/%40vaultbase%2Fsdk?style=flat-square&color=1b1a1a">
+  <a href="LICENSE"><img alt="MIT license" src="https://img.shields.io/npm/l/%40vaultbase%2Fsdk?style=flat-square&color=1b1a1a"></a>
+</p>
+
+<p align="center">
+  <a href="https://vaultbase.dev">Vaultbase</a> ·
+  <a href="https://docs.vaultbase.dev/sdk/quick-start/">Docs</a> ·
+  <a href="https://github.com/vaultbase-sh/vaultbase">Server</a> ·
+  <a href="https://www.npmjs.com/package/@vaultbase/sdk">npm</a>
+</p>
 
 Official TypeScript SDK for [Vaultbase](https://vaultbase.dev) — a typed
 REST + WebSocket / SSE client. Zero runtime dependencies, ESM + CJS dual

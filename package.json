@@ -71,6 +71,14 @@
     "realtime"
   ],
   "license": "MIT",
+  "homepage": "https://docs.vaultbase.dev/sdk/quick-start/",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/vaultbase-sh/sdk.git"
+  },
+  "bugs": {
+    "url": "https://github.com/vaultbase-sh/sdk/issues"
+  },
   "engines": {
     "node": ">=18"
   },
