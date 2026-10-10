@@ -116,6 +116,26 @@ const col = userPicked === "title" ? "title" : "created_at";
 const f = vb.q`${field(col)} != ${null}`;
 ```
 
+## Search, aggregations, images (server 0.15+)
+
+```ts
+// Full-text search over the collection's searchable fields, ranked by relevance.
+const hits = await vb.collection("posts").list({ search: "quick bro", perPage: 20 });
+
+// Count / sum / avg / min / max, grouped by fields or time buckets.
+const byStatus = await vb.collection("orders").aggregate({
+  agg: ["count", "sum(amount)"],
+  groupBy: "status",
+  sort: "-sum_amount",
+});
+
+// Resized, re-encoded image URL.
+const src = vb.files.url(post.cover, { thumb: "800x0", format: "auto", quality: 75 });
+```
+
+On older servers `search`, `aggregate()`, `format` and `quality` are not
+available; everything else in this SDK version still works.
+
 ## Optimistic concurrency (ETag / `If-Match`)
 
 The SDK auto-caches per-record ETags from `GET /api/v1/<col>/<id>` responses
