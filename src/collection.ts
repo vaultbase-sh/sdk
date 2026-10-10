@@ -3,6 +3,8 @@ import type {
   AnyRecord,
   CollectionTypes,
   ListOptions,
+  AggregateOptions,
+  AggregateRow,
   ListResponse,
   MutationOptions,
 } from "./types.ts";
@@ -46,6 +48,24 @@ export class Collection<
       search: options.search,
     };
     return await this.client.request<ListResponse<R>>(`/api/v1/${this.encName()}`, {
+      query,
+      ...(options.requestKey !== undefined ? { requestKey: options.requestKey } : {}),
+      ...(options.signal ? { signal: options.signal } : {}),
+    });
+  }
+
+  /** Count / sum / avg / min / max over the records a list would return, optionally grouped. */
+  async aggregate(options: AggregateOptions = {}): Promise<AggregateRow[]> {
+    const join = (v: string | string[] | undefined) => (Array.isArray(v) ? v.join(",") : v);
+    const query: Record<string, string | number | boolean | undefined> = {
+      agg: join(options.agg),
+      groupBy: join(options.groupBy),
+      filter: options.filter,
+      search: options.search,
+      sort: options.sort,
+      limit: options.limit,
+    };
+    return await this.client.request<AggregateRow[]>(`/api/v1/${this.encName()}/_aggregate`, {
       query,
       ...(options.requestKey !== undefined ? { requestKey: options.requestKey } : {}),
       ...(options.signal ? { signal: options.signal } : {}),

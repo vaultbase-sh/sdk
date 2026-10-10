@@ -51,6 +51,24 @@ export interface ListOptions {
   signal?: AbortSignal;
 }
 
+export interface AggregateOptions {
+  /** `count`, `count(f)`, `sum(f)`, `avg(f)`, `min(f)`, `max(f)`; array or comma-separated. Default `count`. */
+  agg?: string | string[];
+  /** Up to 3 fields; date fields take a bucket, e.g. `created:month`. */
+  groupBy?: string | string[];
+  filter?: string;
+  search?: string;
+  /** A groupBy field or aggregate alias (`sum_amount`), `-` for descending. */
+  sort?: string;
+  /** Max groups returned (default 100, max 1000). */
+  limit?: number;
+  requestKey?: string | null;
+  signal?: AbortSignal;
+}
+
+/** One row per group: groupBy keys plus aggregate aliases (`count`, `sum_amount`, ...). Server 0.15+. */
+export type AggregateRow = Record<string, string | number | boolean | null>;
+
 export interface MutationOptions {
   requestKey?: string | null;
   signal?: AbortSignal;

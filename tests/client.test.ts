@@ -137,3 +137,23 @@ describe("Files.url", () => {
     expect(new URL(f.url("a.png", { format: "auto" })).search).toBe("?format=auto");
   });
 });
+
+describe("Collection.aggregate", () => {
+  it("joins array options and unwraps the rows", async () => {
+    const { Collection } = await import("../src/collection.ts");
+    const urls: string[] = [];
+    const c = makeClient((req) => {
+      urls.push(req.url);
+      return new Response(JSON.stringify({ data: [{ status: "open", count: 2 }] }), {
+        headers: { "content-type": "application/json" },
+      });
+    });
+    const rows = await new Collection(c, "orders").aggregate({ agg: ["count", "sum(amount)"], groupBy: "status", sort: "-count", limit: 5 });
+    expect(rows).toEqual([{ status: "open", count: 2 }]);
+    const u = new URL(urls[0]!);
+    expect(u.pathname).toBe("/api/v1/orders/_aggregate");
+    expect(u.searchParams.get("agg")).toBe("count,sum(amount)");
+    expect(u.searchParams.get("groupBy")).toBe("status");
+    expect(u.searchParams.get("limit")).toBe("5");
+  });
+});

@@ -9,6 +9,8 @@ import { AdminAuth, CollectionAuth, SharedAuth } from "./auth/flows.ts";
 import { defaultAuthStore, type AuthStore } from "./auth/store.ts";
 import { q, field, rawFilter, type Filter } from "./filter.ts";
 import type {
+  AggregateOptions,
+  AggregateRow,
   AnyRecord,
   CollectionTypes,
   DefaultSchema,
@@ -168,6 +170,8 @@ export {
   type ErrorKind,
 } from "./errors.ts";
 export type {
+  AggregateOptions,
+  AggregateRow,
   AnyRecord,
   CollectionTypes,
   DefaultSchema,
