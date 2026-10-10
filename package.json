@@ -47,9 +47,9 @@
     }
   },
   "bin": {
-    "vb-types": "./dist/codegen/bin.js",
-    "vb-migrate": "./dist/migrate/bin.js",
-    "vb-flags": "./dist/codegen/flags-bin.js"
+    "vb-types": "dist/codegen/bin.js",
+    "vb-migrate": "dist/migrate/bin.js",
+    "vb-flags": "dist/codegen/flags-bin.js"
   },
   "files": [
     "dist",
