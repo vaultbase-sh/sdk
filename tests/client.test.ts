@@ -166,7 +166,7 @@ describe("account flows", () => {
       calls.push({ url: new URL(req.url).pathname, body: await req.json().catch(() => null) });
       return new Response(JSON.stringify({ data: { ok: true } }), { headers: { "content-type": "application/json" } });
     });
-    c.authStore.set({ token: "aaa.eyJleHAiOjk5OTk5OTk5OTl9.bbb", record: null });
+    c.authStore.set({ token: "aaa.eyJleHAiOjk5OTk5OTk5OTl9.bbb" });
     const users = new CollectionAuth(c, "users");
     await users.requestEmailChange("new@x.com");
     await users.confirmEmailChange("tok", "pw");
