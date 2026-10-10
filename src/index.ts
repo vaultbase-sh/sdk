@@ -140,7 +140,7 @@ function createAuth<S extends DefaultSchema>(client: HttpClient): AuthInterface<
 
 export { HttpClient, EtagCache } from "./client.ts";
 export { Collection } from "./collection.ts";
-export { Files } from "./files.ts";
+export { Files, type FileUrlParams } from "./files.ts";
 export { Batch, type BatchOpResult, type BatchDeleteResult, type BatchResult } from "./batch.ts";
 export { Custom } from "./custom.ts";
 export { q, field, rawFilter, type Filter } from "./filter.ts";

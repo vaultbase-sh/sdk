@@ -123,3 +123,17 @@ describe("Collection.list search", () => {
     expect(new URL(urls[1]!).searchParams.has("search")).toBe(false);
   });
 });
+
+describe("Files.url", () => {
+  it("puts fit into the thumb value and adds format / quality", async () => {
+    const { Files } = await import("../src/files.ts");
+    const f = new Files(makeClient(() => new Response("")));
+    const u = new URL(f.url("a.png", { thumb: "200x200", fit: "cover", format: "webp", quality: 70 }));
+    expect(u.searchParams.get("thumb")).toBe("200x200_cover");
+    expect(u.searchParams.has("fit")).toBe(false);
+    expect(u.searchParams.get("format")).toBe("webp");
+    expect(u.searchParams.get("quality")).toBe("70");
+    expect(new URL(f.url("a.png", { thumb: "400x0" })).search).toBe("?thumb=400x0");
+    expect(new URL(f.url("a.png", { format: "auto" })).search).toBe("?format=auto");
+  });
+});

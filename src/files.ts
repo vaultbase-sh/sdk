@@ -4,6 +4,17 @@ import { VaultbaseError } from "./errors.ts";
 
 interface TokenResponse { token: string; expires_at: number }
 
+/** Image transform options for {@link Files.url}. */
+export interface FileUrlParams {
+  /** `WxH`, `WxH_cover`, or one side 0 to keep the aspect ratio (`400x0`). */
+  thumb?: string;
+  fit?: "contain" | "cover" | "crop";
+  /** Re-encode the image. `auto` picks webp when the browser accepts it (server 0.15+). */
+  format?: "webp" | "jpeg" | "png" | "auto";
+  /** 1-100, for jpeg / webp output (server 0.15+). */
+  quality?: number;
+}
+
 /**
  * File upload / download / token minting. Auto-mints + caches per-filename
  * access tokens for `protected: true` fields, refreshing ~60s before expiry.
@@ -41,12 +52,15 @@ export class Files {
    * Build a public URL for a stored filename. For `protected` fields the
    * URL includes a `?token=…` minted on demand.
    */
-  url(filename: string, params: { thumb?: string; fit?: "contain" | "cover" | "crop" } = {}): string {
+  url(filename: string, params: FileUrlParams = {}): string {
     const u = new URL(`/api/v1/files/${enc(filename)}`, this.client.baseUrl + "/");
     if (params.thumb) {
-      u.searchParams.set("thumb", params.thumb);
-      if (params.fit) u.searchParams.set("fit", params.fit);
+      // The server reads the fit mode from the thumb value (`WxH_cover`).
+      const fit = params.fit && params.fit !== "contain" && !params.thumb.includes("_") ? `_${params.fit}` : "";
+      u.searchParams.set("thumb", `${params.thumb}${fit}`);
     }
+    if (params.format) u.searchParams.set("format", params.format);
+    if (params.quality !== undefined) u.searchParams.set("quality", String(params.quality));
     return u.toString();
   }
 
@@ -74,7 +88,7 @@ export class Files {
     recordId: string,
     field: string,
     filename: string,
-    params: { thumb?: string; fit?: "contain" | "cover" | "crop" } = {},
+    params: FileUrlParams = {},
   ): Promise<string> {
     const tok = await this.token(collection, recordId, field, filename);
     const u = new URL(this.url(filename, params));
