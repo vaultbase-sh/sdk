@@ -105,3 +105,21 @@ describe("HttpClient.request", () => {
     expect(aborts).toBeGreaterThanOrEqual(1);
   });
 });
+
+describe("Collection.list search", () => {
+  it("sends ?search= and omits it when unset", async () => {
+    const { Collection } = await import("../src/collection.ts");
+    const urls: string[] = [];
+    const c = makeClient((req) => {
+      urls.push(req.url);
+      return new Response(JSON.stringify({ data: [], page: 1, perPage: 30, totalItems: 0, totalPages: 0 }), {
+        headers: { "content-type": "application/json" },
+      });
+    });
+    const posts = new Collection(c, "posts");
+    await posts.list({ search: "hello wor" });
+    await posts.list();
+    expect(new URL(urls[0]!).searchParams.get("search")).toBe("hello wor");
+    expect(new URL(urls[1]!).searchParams.has("search")).toBe(false);
+  });
+});

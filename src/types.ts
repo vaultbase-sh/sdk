@@ -40,6 +40,12 @@ export interface ListOptions {
   expand?: string;
   fields?: string;
   skipTotal?: boolean;
+  /**
+   * Full-text search over the collection's searchable fields (server
+   * 0.15+). Terms are ANDed and the last one matches as a prefix. Results
+   * are ordered by relevance unless `sort` is set.
+   */
+  search?: string;
   /** Opt-in cancel key. */
   requestKey?: string | null;
   signal?: AbortSignal;

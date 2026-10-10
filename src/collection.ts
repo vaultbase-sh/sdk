@@ -43,6 +43,7 @@ export class Collection<
       expand: options.expand,
       fields: options.fields,
       skipTotal: options.skipTotal ? "1" : undefined,
+      search: options.search,
     };
     return await this.client.request<ListResponse<R>>(`/api/v1/${this.encName()}`, {
       query,
