@@ -24,13 +24,37 @@ export interface OAuth2AuthorizeQuery {
   code_challenge?: string;
 }
 
+export interface OAuth2AuthorizeResult {
+  authorize_url: string;
+  /** Server-recorded state, echoed back by the provider on the redirect. */
+  state: string;
+  /**
+   * Proof that the exchange comes from the browser that started the flow
+   * (server 0.17+). Kept in sessionStorage by oauth2Authorize() and sent
+   * by oauth2Exchange() automatically; pass it yourself if the callback is
+   * handled elsewhere.
+   */
+  state_secret: string;
+  code_challenge?: string;
+  code_challenge_method?: "S256";
+  pkce: "server" | "client" | "none";
+}
+
 export interface OAuth2ExchangeInput {
   provider: string;
   code: string;
   redirectUri: string;
-  state?: string;
+  /** Required by server 0.17+: the `state` from the redirect URL. */
+  state: string;
+  /** Defaults to the secret oauth2Authorize() stored for this `state`. */
+  state_secret?: string;
   code_verifier?: string;
 }
+
+export type OAuth2ExchangeResult<R> =
+  | LoginResult<R>
+  | MfaPending
+  | { merge_required: true; merge_token: string; email: string; provider: string };
 
 export interface OAuth2MergeConfirmInput {
   merge_token: string;
@@ -166,9 +190,14 @@ export class CollectionAuth<R = AnyRecord> {
     });
   }
 
-  async recoveryRegenerate(): Promise<{ codes: string[] }> {
+  /**
+   * Issue a new set of recovery codes. Server 0.17+ requires a current
+   * authenticator code: a session token alone can't mint a second factor.
+   */
+  async recoveryRegenerate(code: string): Promise<{ codes: string[] }> {
     return await this.client.request(`/api/v1/auth/${enc(this.collection)}/totp/recovery/regenerate`, {
       method: "POST",
+      body: { code },
     });
   }
 
@@ -202,23 +231,25 @@ export class CollectionAuth<R = AnyRecord> {
     return await this.client.request(`/api/v1/auth/${enc(this.collection)}/oauth2/providers`, { skipAuth: true });
   }
 
-  async oauth2Authorize(query: OAuth2AuthorizeQuery): Promise<{
-    authorize_url: string;
-    code_challenge?: string;
-    code_challenge_method?: "S256";
-    pkce: "server" | "client" | "none";
-  }> {
+  async oauth2Authorize(query: OAuth2AuthorizeQuery): Promise<OAuth2AuthorizeResult> {
     const q: Record<string, string | number | boolean | undefined> = { ...query };
-    return await this.client.request(
+    const data = await this.client.request<OAuth2AuthorizeResult>(
       `/api/v1/auth/${enc(this.collection)}/oauth2/authorize`,
       { query: q, skipAuth: true },
     );
+    if (data.state && data.state_secret) rememberStateSecret(data.state, data.state_secret);
+    return data;
   }
 
-  async oauth2Exchange(input: OAuth2ExchangeInput): Promise<LoginResult<R> | { merge_required: true; merge_token: string; email: string; provider: string }> {
-    const data = await this.client.request<LoginResult<R> | { merge_required: true; merge_token: string; email: string; provider: string }>(
+  /**
+   * Finish an OAuth sign-in. May return an MFA challenge (finish it with
+   * loginMfa) or a merge prompt (oauth2MergeConfirm) instead of a session.
+   */
+  async oauth2Exchange(input: OAuth2ExchangeInput): Promise<OAuth2ExchangeResult<R>> {
+    const state_secret = input.state_secret ?? takeStateSecret(input.state);
+    const data = await this.client.request<OAuth2ExchangeResult<R>>(
       `/api/v1/auth/${enc(this.collection)}/oauth2/exchange`,
-      { method: "POST", body: input, skipAuth: true },
+      { method: "POST", body: { ...input, ...(state_secret ? { state_secret } : {}) }, skipAuth: true },
     );
     if ("token" in data && data.token) {
       this.client.authStore.set({ token: data.token, record: data.record as Record<string, unknown> });
@@ -226,12 +257,16 @@ export class CollectionAuth<R = AnyRecord> {
     return data;
   }
 
-  async oauth2MergeConfirm(input: OAuth2MergeConfirmInput): Promise<LoginResult<R> & { linked_provider: string }> {
-    const data = await this.client.request<LoginResult<R> & { linked_provider: string }>(
+  /**
+   * Link a provider to an existing account. With MFA on, returns an MFA
+   * challenge; the link is applied once loginMfa() succeeds.
+   */
+  async oauth2MergeConfirm(input: OAuth2MergeConfirmInput): Promise<(LoginResult<R> | MfaPending) & { linked_provider: string }> {
+    const data = await this.client.request<(LoginResult<R> | MfaPending) & { linked_provider: string }>(
       `/api/v1/auth/${enc(this.collection)}/oauth2/merge-confirm`,
       { method: "POST", body: input },
     );
-    if (data.token) {
+    if ("token" in data && data.token) {
       this.client.authStore.set({ token: data.token, record: data.record as Record<string, unknown> });
     }
     return data;
@@ -257,7 +292,8 @@ export class AdminAuth {
     });
   }
 
-  async setupStatus(): Promise<{ has_admin: boolean }> {
+  /** `key_required` (server 0.17+): setup needs the key the server printed at first boot. */
+  async setupStatus(): Promise<{ has_admin: boolean; key_required?: boolean }> {
     return await this.client.request("/api/v1/admin/setup/status", { skipAuth: true });
   }
 
@@ -306,3 +342,31 @@ export class SharedAuth {
 }
 
 function enc(s: string): string { return encodeURIComponent(s); }
+
+// ── OAuth state_secret storage ───────────────────────────────────────────────
+// The secret has to survive the redirect to the provider and back, in the
+// same browser tab: sessionStorage. Outside a browser nothing is stored and
+// the caller passes `state_secret` to oauth2Exchange() itself.
+
+const STATE_KEY = (state: string) => `vaultbase:oauth2:${state}`;
+
+function session(): Pick<Storage, "getItem" | "setItem" | "removeItem"> | null {
+  try {
+    const s = (globalThis as { sessionStorage?: Storage }).sessionStorage;
+    return s ?? null;
+  } catch { return null; }
+}
+
+function rememberStateSecret(state: string, secret: string): void {
+  try { session()?.setItem(STATE_KEY(state), secret); } catch { /* storage full / blocked */ }
+}
+
+function takeStateSecret(state: string): string | undefined {
+  const s = session();
+  if (!s) return undefined;
+  try {
+    const v = s.getItem(STATE_KEY(state));
+    s.removeItem(STATE_KEY(state));
+    return v ?? undefined;
+  } catch { return undefined; }
+}

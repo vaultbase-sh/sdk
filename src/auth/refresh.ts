@@ -44,7 +44,9 @@ export class RefreshCoordinator {
       const data = await this.client.request<RefreshResponse>("/api/v1/auth/refresh", {
         method: "POST",
         skipAuth: false,
-        // Send the current bearer manually so we can call this without re-entering maybeRefresh.
+        // Sends the current bearer but must not re-enter maybeRefresh(): that
+        // returns this same in-flight refresh, which would wait on itself.
+        skipRefresh: true,
         requestKey: null,
       });
       if (!data?.token) {

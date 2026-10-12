@@ -29,6 +29,12 @@ export interface RequestOptions {
   signal?: AbortSignal;
   /** Skip JWT refresh + auth header (login, refresh, public endpoints). */
   skipAuth?: boolean;
+  /**
+   * Send the auth header but skip the proactive refresh. Used by the refresh
+   * call itself: going through maybeRefresh() there awaited the in-flight
+   * refresh from inside it, so it never settled.
+   */
+  skipRefresh?: boolean;
 }
 
 interface JwtClaims { exp?: number; iat?: number; [k: string]: unknown }
@@ -98,7 +104,7 @@ export class HttpClient {
     const headers: Record<string, string> = { "Content-Type": "application/json", ...options.headers };
 
     if (!options.skipAuth) {
-      await this.maybeRefresh();
+      if (!options.skipRefresh) await this.maybeRefresh();
       if (this.authTransport === "header") {
         const stored = this.authStore.get();
         if (stored?.token) headers.Authorization = `Bearer ${stored.token}`;

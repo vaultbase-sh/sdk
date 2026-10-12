@@ -9,3 +9,7 @@ dist/
 *.key
 coverage/
 .tmp/
+
+# Local AI tooling state (claude-flow / Claude Code)
+.claude-flow/
+.claude/
