@@ -61,11 +61,13 @@ export class FlagsClient {
   /** Force a refetch of the bulk evaluation. */
   async refresh(): Promise<void> {
     try {
-      const res = await this.client.request<{ data?: Record<string, FlagValue> }>(
+      // The server answers `{ data: { key: value } }`; HttpClient.request
+      // unwraps that envelope, so `res` is the flag map itself.
+      const res = await this.client.request<Record<string, FlagValue> | null>(
         "/api/v1/flags/evaluate",
         { method: "POST", body: { context: this.context }, skipAuth: true },
       );
-      const next = res.data ?? {};
+      const next = res && typeof res === "object" ? res : {};
       const changed = diffKeys(this.cache, next);
       this.cache.clear();
       for (const [k, v] of Object.entries(next)) this.cache.set(k, v);
