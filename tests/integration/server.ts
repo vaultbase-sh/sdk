@@ -58,6 +58,8 @@ export async function startTestServer(): Promise<Started> {
   process.env["VAULTBASE_JWT_SECRET"] = "test-jwt-secret-do-not-use-in-prod";
   // Disable rate limiting so test bursts don't 429 themselves.
   process.env["VAULTBASE_RATE_ENABLED"] = "0";
+  // First-admin setup needs a key (server 0.17); use a known one.
+  process.env["VAULTBASE_SETUP_KEY"] = "integration-setup-key";
 
   const mod = await loadServer();
   const cfg = await mod.loadConfig();
@@ -80,7 +82,7 @@ export async function startTestServer(): Promise<Started> {
   const adminPassword = "integration-test-password";
   const setup = await fetch(`${baseUrl}/api/v1/admin/setup`, {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: { "content-type": "application/json", "x-setup-key": "integration-setup-key" },
     body: JSON.stringify({ email: adminEmail, password: adminPassword }),
   });
   if (!setup.ok) throw new Error(`setup failed: ${setup.status} ${await setup.text()}`);

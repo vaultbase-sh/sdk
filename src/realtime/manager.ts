@@ -13,6 +13,8 @@ interface Sub<R = AnyRecord> {
 
 interface Transport {
   send(msg: { type: "subscribe" | "unsubscribe"; topics: string[] }): void;
+  /** Present the current token on the open connection. */
+  auth(token: string | null): void;
   close(): void;
 }
 
@@ -31,12 +33,43 @@ export class RealtimeManager {
   private clientId: string | null = null;
   private heartbeat: ReturnType<typeof setInterval> | null = null;
   private dedup = new Set<string>();
+  private lastToken: string | null = null;
+  private stopAuthWatch: (() => void) | null = null;
 
   constructor(private readonly client: HttpClient) {}
+
+  /**
+   * Keep the connection's identity in step with the auth store. The server
+   * checks a connection's token when it's sent and re-checks it every
+   * minute (server 0.17+); a token refreshed after connecting was never
+   * re-sent, so the connection fell back to anonymous when the old one
+   * expired.
+   */
+  private watchAuth(): void {
+    if (this.stopAuthWatch || !this.client.authStore.onChange) return;
+    this.lastToken = this.client.authStore.get()?.token ?? null;
+    this.stopAuthWatch = this.client.authStore.onChange(() => {
+      const token = this.client.authStore.get()?.token ?? null;
+      if (token === this.lastToken) return;
+      this.lastToken = token;
+      this.transport?.auth(token);
+    });
+  }
+
+  /** `auth_expired` from the server: refresh once; the new token is re-sent via watchAuth. */
+  private onAuthExpired(): void {
+    if (!this.client.authStore.get()?.token) return;
+    void this.client.refresher.refreshOnce().then((ok) => {
+      // A store without onChange can't notify us; send the new token directly.
+      if (ok && !this.client.authStore.onChange) this.transport?.auth(this.client.authStore.get()?.token ?? null);
+    }).catch(() => {});
+  }
 
   subscribe<R = AnyRecord>(collection: string, filter: SubscribeFilter, cb: SubscribeCallback<R>): () => void {
     const sub: Sub = { collection, filter, cb: cb as SubscribeCallback };
     this.subs.push(sub);
+    this.closed = false;
+    this.watchAuth();
     const topics = topicsFor(sub);
     for (const t of topics) {
       this.topicRefs.set(t, (this.topicRefs.get(t) ?? 0) + 1);
@@ -66,6 +99,8 @@ export class RealtimeManager {
     this.closed = true;
     this.subs = [];
     this.topicRefs.clear();
+    this.stopAuthWatch?.();
+    this.stopAuthWatch = null;
     if (this.heartbeat) { clearInterval(this.heartbeat); this.heartbeat = null; }
     try { this.transport?.close(); } catch { /* noop */ }
     this.transport = null;
@@ -135,6 +170,12 @@ export class RealtimeManager {
         this.startHeartbeat(() => ws.send(JSON.stringify({ type: "ping" })));
         const transport: Transport = {
           send: (msg) => ws.send(JSON.stringify(msg)),
+          // A null token can't be "sent"; the server keeps the old identity
+          // until it expires, then sends auth_expired. Reconnect to drop it now.
+          auth: (token) => {
+            if (token) { try { ws.send(JSON.stringify({ type: "auth", token })); } catch { /* closed */ } }
+            else { try { ws.close(); } catch { /* noop */ } }
+          },
           close: () => { try { ws.close(); } catch { /* noop */ } },
         };
         resolve(transport);
@@ -143,6 +184,7 @@ export class RealtimeManager {
         try {
           const data = JSON.parse(typeof e.data === "string" ? e.data : "");
           if (data?.type === "connected") return;
+          if (data?.type === "auth_expired") { this.onAuthExpired(); return; }
           if (data?.collection && data?.type) this.deliver(data as RealtimeEvent);
         } catch { /* drop malformed */ }
       });
@@ -180,6 +222,8 @@ export class RealtimeManager {
             if (msg.type === "subscribe") void this.sseSubscribe(this.uniqueTopics());
             else if (msg.type === "unsubscribe") void this.sseSubscribe(this.uniqueTopics());
           },
+          // The SSE control POST carries the token; re-posting re-authenticates.
+          auth: () => { void this.sseSubscribe(this.uniqueTopics()).catch(() => {}); },
           close: () => {
             try { es.close(); } catch { /* noop */ }
             if (this.clientId) {
@@ -191,8 +235,9 @@ export class RealtimeManager {
       });
       es.addEventListener("message", (ev: MessageEvent) => {
         try {
-          const data = JSON.parse(ev.data) as RealtimeEvent;
-          if (data?.collection && data?.type) this.deliver(data);
+          const data = JSON.parse(ev.data) as RealtimeEvent | { type: "auth_expired" };
+          if (data?.type === "auth_expired") { this.onAuthExpired(); return; }
+          if ("collection" in data && data.collection && data.type) this.deliver(data as RealtimeEvent);
         } catch { /* drop */ }
       });
       es.addEventListener("error", () => {
