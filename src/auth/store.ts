@@ -45,6 +45,8 @@ interface BrowserStorageLike {
 
 abstract class WebStorageAuthStore implements AuthStore {
   protected abstract storage(): BrowserStorageLike | null;
+  /** Same-tab listeners: the browser's `storage` event never fires in the tab that wrote. */
+  private readonly listeners = new Set<() => void>();
   constructor(protected readonly key = "vaultbase_auth") {}
 
   get(): StoredAuth | null {
@@ -60,9 +62,13 @@ abstract class WebStorageAuthStore implements AuthStore {
     if (!s) return;
     if (value === null) s.removeItem(this.key);
     else s.setItem(this.key, JSON.stringify(value));
+    for (const fn of this.listeners) fn();
   }
 
-  onChange(_listener: () => void): () => void { void _listener; return () => {}; }
+  onChange(listener: () => void): () => void {
+    this.listeners.add(listener);
+    return () => { this.listeners.delete(listener); };
+  }
 }
 
 export class SessionStorageAuthStore extends WebStorageAuthStore {
@@ -84,15 +90,17 @@ export class LocalStorageAuthStore extends WebStorageAuthStore {
       : null;
   }
 
+  /** Fires for changes in this tab and, via the `storage` event, in other tabs. */
   override onChange(listener: () => void): () => void {
-    if (typeof globalThis === "undefined" || !("addEventListener" in globalThis)) return () => {};
+    const offLocal = super.onChange(listener);
+    if (typeof globalThis === "undefined" || !("addEventListener" in globalThis)) return offLocal;
     const target = globalThis as unknown as {
       addEventListener: (t: string, h: (e: { key?: string }) => void) => void;
       removeEventListener: (t: string, h: (e: { key?: string }) => void) => void;
     };
     const handler = (e: { key?: string }) => { if (e.key === this.key) listener(); };
     target.addEventListener("storage", handler);
-    return () => target.removeEventListener("storage", handler);
+    return () => { offLocal(); target.removeEventListener("storage", handler); };
   }
 }
 
