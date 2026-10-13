@@ -35,6 +35,8 @@ export interface RequestOptions {
    * refresh from inside it, so it never settled.
    */
   skipRefresh?: boolean;
+  /** @internal Set on the one retry after a 401 + refresh. */
+  retried?: boolean;
 }
 
 interface JwtClaims { exp?: number; iat?: number; [k: string]: unknown }
@@ -194,11 +196,17 @@ export class HttpClient {
 
     if (res.status === 401) {
       // Try a single refresh+retry for non-auth-flow paths.
-      if (!options.skipAuth && !path.endsWith("/api/v1/auth/refresh")) {
+      if (!options.skipAuth && !options.retried && !path.endsWith("/api/v1/auth/refresh")) {
         const ok = await this.refresher.refreshOnce().catch(() => false);
         if (ok) {
-          return await this.request<T>(path, { ...options, skipAuth: false });
+          return await this.request<T>(path, { ...options, skipAuth: false, retried: true });
         }
+      }
+      // A token we just refreshed was refused too: this endpoint refuses the
+      // caller (e.g. a route that requires a non-guest account). The session
+      // is fine, so keep it; refreshing again would only loop.
+      if (options.retried) {
+        throw VaultbaseError.auth("forbidden", extractMessage(data) ?? "Unauthorized");
       }
       this.authStore.set(null);
       throw VaultbaseError.auth("expired", extractMessage(data) ?? "Unauthorized");
