@@ -7,7 +7,8 @@
  * objects.
  *
  * Output: a `.ts` source file with one record / create / update interface
- * per collection plus a top-level `Schema` type.
+ * per collection plus a top-level `Schema` type. Singleton collections carry
+ * `singleton: true` in their `Schema` entry, which `vb.singleton()` keys on.
  */
 
 export interface SnapshotField {
@@ -25,7 +26,7 @@ export interface SnapshotField {
 export interface SnapshotCollection {
   id?: string;
   name: string;
-  type: "base" | "auth" | "view";
+  type: "base" | "auth" | "view" | "singleton";
   fields: string | SnapshotField[];
   view_query?: string | null;
 }
@@ -65,6 +66,9 @@ export function generateTypes(snapshot: SnapshotShape, opts: GenerateOptions = {
 
     if (col.type === "view") {
       schemaEntries.push(`  ${quoteKey(col.name)}: { record: ${recordName}; create: never; update: never };`);
+    } else if (col.type === "singleton") {
+      // The one record is made with the collection; there is no create.
+      schemaEntries.push(`  ${quoteKey(col.name)}: { record: ${recordName}; create: never; update: ${updateName}; singleton: true };`);
     } else {
       schemaEntries.push(`  ${quoteKey(col.name)}: { record: ${recordName}; create: ${createName}; update: ${updateName} };`);
     }
@@ -100,8 +104,9 @@ function emitRecord(name: string, fields: SnapshotField[], col: SnapshotCollecti
     if (f.type === "password") continue; // never on Record
     if (col.type === "auth" && (f.name === "email" || f.name === "password")) continue;
     // The server stores an unset field as NULL and returns it as `null`.
+    // A singleton's record starts with every field empty, required or not.
     const t = tsType(f, "read");
-    lines.push(f.required ? `  ${quoteKey(f.name)}: ${t};` : `  ${quoteKey(f.name)}?: ${t} | null;`);
+    lines.push(f.required && col.type !== "singleton" ? `  ${quoteKey(f.name)}: ${t};` : `  ${quoteKey(f.name)}?: ${t} | null;`);
   }
   lines.push("}");
   return lines.join("\n");

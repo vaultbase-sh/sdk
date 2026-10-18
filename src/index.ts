@@ -1,5 +1,6 @@
 import { HttpClient, type ClientOptions } from "./client.ts";
 import { Collection, type CollectionFor } from "./collection.ts";
+import { Singleton, type SingletonFor } from "./singleton.ts";
 import { Files } from "./files.ts";
 import { Batch } from "./batch.ts";
 import { Custom } from "./custom.ts";
@@ -17,6 +18,7 @@ import type {
   ListOptions,
   ListResponse,
   RealtimeEvent,
+  SingletonKeys,
   SubscribeCallback,
   SubscribeFilter,
 } from "./types.ts";
@@ -64,6 +66,19 @@ export class Vaultbase<S extends DefaultSchema = DefaultSchema> {
   ): Collection<R, C, U>;
   collection(name: string): Collection {
     return new Collection(this.client, name);
+  }
+
+  /**
+   * Fetch a typed accessor for a singleton collection (one record, read and
+   * updated at the collection's own path).
+   *
+   *   const settings = await vb.singleton("settings").get();
+   *   await vb.singleton("settings").update({ theme: "dark" });
+   */
+  singleton<K extends SingletonKeys<S>>(name: K): SingletonFor<S[K]>;
+  singleton<R = AnyRecord, U = AnyRecord>(name: string): Singleton<R, U>;
+  singleton(name: string): Singleton {
+    return new Singleton(this.client, name);
   }
 
   /** Build a fresh batch (max 100 ops, server-enforced). Per-op result types
@@ -141,7 +156,8 @@ function createAuth<S extends DefaultSchema>(client: HttpClient): AuthInterface<
 // ── Public re-exports ───────────────────────────────────────────────────────
 
 export { HttpClient, EtagCache } from "./client.ts";
-export { Collection } from "./collection.ts";
+export { Collection, type ConcurrencyOptions, type UpdateOptions, type DeleteOptions } from "./collection.ts";
+export { Singleton, type SingletonGetOptions, type SingletonFor } from "./singleton.ts";
 export { Files, type FileUrlParams } from "./files.ts";
 export { Batch, type BatchOpResult, type BatchDeleteResult, type BatchResult } from "./batch.ts";
 export { Custom } from "./custom.ts";
@@ -178,6 +194,7 @@ export type {
   ListOptions,
   ListResponse,
   RealtimeEvent,
+  SingletonKeys,
   SubscribeCallback,
   SubscribeFilter,
 };

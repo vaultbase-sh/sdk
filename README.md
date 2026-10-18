@@ -136,6 +136,28 @@ const src = vb.files.url(post.cover, { thumb: "800x0", format: "auto", quality: 
 On older servers `search`, `aggregate()`, `format` and `quality` are not
 available; everything else in this SDK version still works.
 
+## Singleton collections (`vb.singleton`)
+
+A collection of type `singleton` holds exactly one record (site settings, a
+feature config), created with the collection with its fields empty. Read and
+update it at the collection's own path — no id needed:
+
+```ts
+const settings = await vb.singleton("site_settings").get({ expand: "owner" });
+//   → GET /api/v1/site_settings
+
+await vb.singleton("site_settings").update({ maintenance: true });
+//   → PATCH /api/v1/site_settings
+//     If-Match: <ETag from the last get/update of this singleton>
+```
+
+`update` takes the same `ifMatch` option as `collection().update` (`"auto"`
+by default, an explicit ETag, or `false`); a stale tag throws
+`VaultbaseError(kind: "precondition_failed")`. With codegen, singletons are
+marked `singleton: true` in `Schema` and `vb.singleton("name")` is typed;
+realtime updates arrive on `vb.subscribe("site_settings", ...)` like any
+collection. Creating or deleting the record is refused by the server (405).
+
 ## Optimistic concurrency (ETag / `If-Match`)
 
 The SDK auto-caches per-record ETags from `GET /api/v1/<col>/<id>` responses

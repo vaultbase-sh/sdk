@@ -37,6 +37,11 @@ export interface RequestOptions {
   skipRefresh?: boolean;
   /** @internal Set on the one retry after a 401 + refresh. */
   retried?: boolean;
+  /**
+   * @internal Called with the raw response before it is decoded, for callers
+   * that need a header the envelope drops (the singleton accessor's ETag).
+   */
+  onResponse?: (res: Response) => void;
 }
 
 interface JwtClaims { exp?: number; iat?: number; [k: string]: unknown }
@@ -146,6 +151,7 @@ export class HttpClient {
     }
 
     this.captureEtag(path, res);
+    options.onResponse?.(res);
     return await this.handleResponse<T>(res, path, options);
   }
 

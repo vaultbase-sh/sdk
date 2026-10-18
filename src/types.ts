@@ -11,7 +11,14 @@ export interface CollectionTypes<R = AnyRecord, C = AnyRecord, U = AnyRecord> {
   record: R;
   create: C;
   update: U;
+  /** Set by codegen on singleton collections, which `vb.singleton()` accepts. */
+  singleton?: true;
 }
+
+/** The keys of a schema that name singleton collections. */
+export type SingletonKeys<S> = {
+  [K in keyof S]: S[K] extends { singleton: true } ? K : never;
+}[keyof S] & string;
 
 /**
  * Top-level schema map. Defaults to a permissive shape so apps that skip

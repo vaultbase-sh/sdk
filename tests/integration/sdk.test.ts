@@ -6,7 +6,7 @@
  */
 
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
-import { Vaultbase } from "../../src/index.ts";
+import { Vaultbase, VaultbaseError, isVaultbaseError } from "../../src/index.ts";
 import { generateTypes, type SnapshotShape } from "../../src/codegen/generate.ts";
 import { MemoryAuthStore } from "../../src/auth/store.ts";
 import { startTestServer, serverAvailable } from "./server.ts";
@@ -161,6 +161,50 @@ d("integration — SDK ↔ live Vaultbase", () => {
     await posts.get(p.id); // caches the ETag
     const updated = await posts.update(p.id, { title: "etag-2" }, { ifMatch: "auto" });
     expect(updated.title).toBe("etag-2");
+  });
+
+  it("singleton: get returns the one record with empty fields, update persists", async () => {
+    await vb.client.request("/api/v1/collections", {
+      method: "POST",
+      body: {
+        name: "site_settings",
+        type: "singleton",
+        fields: [
+          { name: "title", type: "text" },
+          { name: "maintenance", type: "bool" },
+        ],
+      },
+    });
+    interface Settings { id: string; title?: string | null; maintenance?: boolean | null }
+    const settings = vb.singleton<Settings>("site_settings");
+
+    const first = await settings.get();
+    expect(first.id).toBeTruthy();
+    expect(first.title ?? null).toBeNull();
+    expect(first.maintenance ?? null).toBeNull();
+
+    // Default ifMatch is "auto": the ETag from the get above rides along.
+    const updated = await settings.update({ title: "My site", maintenance: true });
+    expect(updated.id).toBe(first.id);
+    expect(updated.title).toBe("My site");
+
+    const again = await vb.singleton<Settings>("site_settings").get();
+    expect(again.id).toBe(first.id);
+    expect(again.title).toBe("My site");
+    expect(again.maintenance).toBe(true);
+  });
+
+  it("singleton: a stale explicit ifMatch gives precondition_failed", async () => {
+    const settings = vb.singleton<{ id: string; title?: string | null }>("site_settings");
+    await settings.get();
+    try {
+      await settings.update({ title: "stale" }, { ifMatch: `W/"0"` });
+      throw new Error("should have rejected");
+    } catch (e) {
+      expect(isVaultbaseError(e)).toBe(true);
+      expect((e as VaultbaseError).kind).toBe("precondition_failed");
+    }
+    expect((await settings.get()).title).toBe("My site");
   });
 
   it("a one-time file token is not reused for a second URL", async () => {

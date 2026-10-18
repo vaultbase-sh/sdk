@@ -104,4 +104,32 @@ describe("generateTypes", () => {
     expect(create).toContain("embedding?: number[] | null;");
     expect(out).not.toContain("unknown");
   });
+
+  it("singleton collection: record + update types, no create entry, marked singleton", () => {
+    const out = generateTypes({
+      collections: [{
+        name: "site_settings",
+        type: "singleton",
+        fields: JSON.stringify([
+          { name: "title", type: "text", required: true },
+          { name: "maintenance", type: "bool" },
+        ]),
+      }],
+    });
+    const record = out.slice(out.indexOf("export interface SiteSettingsRecord"), out.indexOf("export interface SiteSettingsCreate"));
+    expect(record).toContain("id: string;");
+    // The record is created with its fields empty, so even required fields may be null.
+    expect(record).toContain("title?: string | null;");
+    expect(record).toContain("maintenance?: boolean | null;");
+    expect(out).toContain("export type SiteSettingsUpdate = Partial<SiteSettingsCreate>;");
+    expect(out).toContain("site_settings: { record: SiteSettingsRecord; create: never; update: SiteSettingsUpdate; singleton: true };");
+  });
+
+  it("base collections carry no singleton marker", () => {
+    const out = generateTypes({
+      collections: [{ name: "posts", type: "base", fields: "[]" }],
+    });
+    expect(out).toContain("posts: { record: PostsRecord; create: PostsCreate; update: PostsUpdate };");
+    expect(out).not.toContain("singleton");
+  });
 });
