@@ -134,6 +134,51 @@ d("integration — SDK ↔ live Vaultbase", () => {
     expect(ts).toContain("title: string");
   });
 
+  // The four SDK contract bugs from the 0.23.1 review, against the real server
+  // (0.6.3 fixed them; the unit tests used mocks).
+  it("iterate() with skipTotal pages past the first page", async () => {
+    for (let i = 0; i < 12; i++) await vb.collection<PostRecord>("posts").create({ title: `skip-${i}` });
+    let n = 0;
+    for await (const _r of vb.collection<PostRecord>("posts").iterate({ filter: 'title ~ "skip-"', perPage: 5, skipTotal: true })) { void _r; n++; }
+    expect(n).toBe(12);
+  });
+
+  it("iterate() with perPage above the server's cap of 500 gets everything", async () => {
+    // 520 records in batches of 100 (the batch limit).
+    for (let b = 0; b < 6; b++) {
+      let batch = vb.batch();
+      for (let i = 0; i < (b < 5 ? 100 : 20); i++) batch = batch.create("posts", { title: `cap-${b}-${i}` });
+      await batch.run();
+    }
+    let n = 0;
+    for await (const _r of vb.collection<PostRecord>("posts").iterate({ filter: 'title ~ "cap-"', perPage: 1000 })) { void _r; n++; }
+    expect(n).toBe(520);
+  });
+
+  it('ifMatch: "auto" uses the cached ETag, not the literal "auto"', async () => {
+    const posts = vb.collection<PostRecord>("posts");
+    const p = await posts.create({ title: "etag" });
+    await posts.get(p.id); // caches the ETag
+    const updated = await posts.update(p.id, { title: "etag-2" }, { ifMatch: "auto" });
+    expect(updated.title).toBe("etag-2");
+  });
+
+  it("a one-time file token is not reused for a second URL", async () => {
+    await vb.client.request("/api/v1/collections", {
+      method: "POST",
+      body: { name: "vault", type: "base", view_rule: null, list_rule: null, create_rule: null,
+        fields: [{ name: "doc", type: "file", options: { protected: true, oneTimeToken: true } }] },
+    });
+    const rec = await vb.collection<{ id: string }>("vault").create({});
+    const meta = await vb.files.upload("vault", rec.id, "doc", new File([new Uint8Array([5, 6, 7])], "secret.bin"));
+    const filename = (Array.isArray(meta) ? meta[0]! : meta).filename;
+    const first = await vb.files.urlWithToken("vault", rec.id, "doc", filename);
+    const second = await vb.files.urlWithToken("vault", rec.id, "doc", filename);
+    expect(second).not.toBe(first);
+    expect((await fetch(first)).status).toBe(200);
+    expect((await fetch(second)).status).toBe(200);
+  });
+
   it("error model: 401 → kind=auth", async () => {
     const anon = new Vaultbase({
       baseUrl: server.baseUrl,

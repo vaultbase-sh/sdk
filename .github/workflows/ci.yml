@@ -1,0 +1,72 @@
+name: CI
+
+# Typecheck, test and build every push and pull request. The server repo is
+# checked out next to the SDK so the live integration tests
+# (tests/integration/) run against a real Vaultbase instead of skipping;
+# a weekly run catches server changes that break the SDK.
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  sdk:
+    name: SDK (typecheck, tests against the server, build)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: sdk
+
+      # tests/integration/server.ts imports the server from ../vaultbase.
+      - uses: actions/checkout@v4
+        with:
+          repository: vaultbase-sh/vaultbase
+          ref: main
+          path: vaultbase
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          # Same pinned runtime as the server's CI and releases.
+          bun-version: 1.4.2
+
+      - name: Install SDK dependencies
+        working-directory: sdk
+        run: bun install --frozen-lockfile
+
+      - name: Install server dependencies
+        working-directory: vaultbase
+        run: bun install --frozen-lockfile
+
+      - name: Typecheck
+        working-directory: sdk
+        run: bun run typecheck
+
+      - name: Test
+        working-directory: sdk
+        run: bun test
+
+      - name: Integration tests ran
+        # They skip silently when the server can't be found; fail instead.
+        working-directory: sdk
+        run: |
+          out="$(bun test tests/integration 2>&1)"
+          echo "$out" | tail -5
+          echo "$out" | grep -Eq '^ *[1-9][0-9]* pass' || { echo "::error::integration tests did not run"; exit 1; }
+          if echo "$out" | grep -Eq '^ *[1-9][0-9]* skip'; then echo "::error::integration tests were skipped"; exit 1; fi
+
+      - name: Build
+        working-directory: sdk
+        run: bun run build
