@@ -99,9 +99,9 @@ function emitRecord(name: string, fields: SnapshotField[], col: SnapshotCollecti
     if (f.system) continue;
     if (f.type === "password") continue; // never on Record
     if (col.type === "auth" && (f.name === "email" || f.name === "password")) continue;
+    // The server stores an unset field as NULL and returns it as `null`.
     const t = tsType(f, "read");
-    const opt = f.required ? "" : "?";
-    lines.push(`  ${quoteKey(f.name)}${opt}: ${t};`);
+    lines.push(f.required ? `  ${quoteKey(f.name)}: ${t};` : `  ${quoteKey(f.name)}?: ${t} | null;`);
   }
   lines.push("}");
   return lines.join("\n");
@@ -119,9 +119,9 @@ function emitCreate(name: string, fields: SnapshotField[], col: SnapshotCollecti
     if (f.system) continue;
     if (f.type === "autodate") continue;
     if (col.type === "auth" && (f.name === "email" || f.name === "password" || f.name === "verified")) continue;
+    // `null` clears a non-required field.
     const t = tsType(f, "write");
-    const opt = f.required ? "" : "?";
-    lines.push(`  ${quoteKey(f.name)}${opt}: ${t};`);
+    lines.push(f.required ? `  ${quoteKey(f.name)}: ${t};` : `  ${quoteKey(f.name)}?: ${t} | null;`);
   }
   lines.push("}");
   return lines.join("\n");
@@ -137,11 +137,16 @@ function tsType(f: SnapshotField, mode: "read" | "write"): string {
     case "email":
     case "url":
     case "editor":
-    case "date":
     case "relation":
+    case "color":
       return "string";
+    case "date":
+      // Stored and returned as Unix seconds; writes also take an ISO string.
+      return mode === "read" ? "number" : "string | number";
     case "number":
       return "number";
+    case "vector":
+      return "number[]";
     case "bool":
       return "boolean";
     case "autodate":

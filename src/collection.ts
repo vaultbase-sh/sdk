@@ -79,7 +79,12 @@ export class Collection<
     while (true) {
       const res = await this.list({ ...options, page, perPage });
       for (const r of res.data) yield r;
-      if (res.data.length < perPage || page >= res.totalPages) return;
+      // The server clamps perPage (500 max) and echoes the size it used, so a
+      // short page is measured against that, not the requested size.
+      const size = typeof res.perPage === "number" && res.perPage > 0 ? res.perPage : perPage;
+      if (res.data.length === 0 || res.data.length < size) return;
+      // totalPages is -1 under skipTotal: unknown, keep paging.
+      if (res.totalPages >= 0 && page >= res.totalPages) return;
       page++;
     }
   }
@@ -128,7 +133,7 @@ export class Collection<
    */
   private buildIfMatchHeaders(id: string, ifMatch: ConcurrencyOptions["ifMatch"]): Record<string, string> | null {
     if (ifMatch === false) return null;
-    if (typeof ifMatch === "string" && ifMatch.length > 0) return { "If-Match": ifMatch };
+    if (typeof ifMatch === "string" && ifMatch.length > 0 && ifMatch !== "auto") return { "If-Match": ifMatch };
     const cached = this.client.etags.get(this.name, id);
     if (!cached) return null;
     return { "If-Match": cached };

@@ -77,4 +77,31 @@ describe("generateTypes", () => {
     expect(out).toContain("email: string;");
     expect(out).toContain("verified: boolean;");
   });
+
+  it("types date / vector / color fields and empty values as the server returns them", () => {
+    const out = generateTypes({
+      collections: [{
+        name: "events",
+        type: "base",
+        fields: JSON.stringify([
+          { name: "starts", type: "date", required: true },
+          { name: "ends", type: "date" },
+          { name: "embedding", type: "vector", options: { dimensions: 3 } },
+          { name: "tint", type: "color" },
+          { name: "title", type: "text", required: true },
+        ]),
+      }],
+    });
+    const record = out.slice(out.indexOf("export interface EventsRecord"), out.indexOf("export interface EventsCreate"));
+    const create = out.slice(out.indexOf("export interface EventsCreate"), out.indexOf("export type EventsUpdate"));
+    expect(record).toContain("starts: number;");
+    expect(record).toContain("ends?: number | null;");
+    expect(record).toContain("embedding?: number[] | null;");
+    expect(record).toContain("tint?: string | null;");
+    expect(record).toContain("title: string;");
+    expect(create).toContain("starts: string | number;");
+    expect(create).toContain("ends?: string | number | null;");
+    expect(create).toContain("embedding?: number[] | null;");
+    expect(out).not.toContain("unknown");
+  });
 });

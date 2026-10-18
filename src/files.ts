@@ -1,8 +1,13 @@
-import type { HttpClient } from "./client.ts";
+import { decodeJwtPayload, type HttpClient } from "./client.ts";
 import type { FileMeta, UploadOptions } from "./types.ts";
 import { VaultbaseError } from "./errors.ts";
 
-interface TokenResponse { token: string; expires_at: number }
+interface TokenResponse {
+  token: string;
+  expires_at: number;
+  /** Set by servers that report it: the token is consumed on first download. */
+  one_time?: boolean;
+}
 
 /** Image transform options for {@link Files.url}. */
 export interface FileUrlParams {
@@ -18,9 +23,13 @@ export interface FileUrlParams {
 /**
  * File upload / download / token minting. Auto-mints + caches per-filename
  * access tokens for `protected: true` fields, refreshing ~60s before expiry.
+ * One-time tokens are never cached, and the cache is dropped whenever the
+ * signed-in identity changes (the token was granted to the previous one).
  */
 export class Files {
   private tokenCache = new Map<string, TokenResponse>();
+  /** Identity the cached tokens were minted for; `undefined` until the first mint. */
+  private cacheIdentity: string | null | undefined;
 
   constructor(private readonly client: HttpClient) {}
 
@@ -69,6 +78,11 @@ export class Files {
    * refreshes ~60s before expiry.
    */
   async token(collection: string, recordId: string, field: string, filename: string): Promise<TokenResponse> {
+    const identity = this.identity();
+    if (identity !== this.cacheIdentity) {
+      this.tokenCache.clear();
+      this.cacheIdentity = identity;
+    }
     const key = `${collection}:${recordId}:${field}:${filename}`;
     const now = Math.floor(Date.now() / 1000);
     const cached = this.tokenCache.get(key);
@@ -78,8 +92,22 @@ export class Files {
       `/api/v1/files/${enc(collection)}/${enc(recordId)}/${enc(field)}/${enc(filename)}/token`,
       { method: "POST" },
     );
-    this.tokenCache.set(key, data);
+    if (!isOneTime(data)) this.tokenCache.set(key, data);
     return data;
+  }
+
+  /** Drop every cached file token. */
+  clearTokenCache(): void { this.tokenCache.clear(); }
+
+  /** Who file tokens are minted for: `aud:collection:id` from the auth JWT, or the cookie-mode record id. */
+  private identity(): string | null {
+    const stored = this.client.authStore.get();
+    if (!stored) return null;
+    const claims = stored.token ? decodeJwtPayload(stored.token) : null;
+    if (claims) return `${String(claims["aud"] ?? "")}:${String(claims["collection"] ?? "")}:${String(claims["id"] ?? claims["sub"] ?? "")}`;
+    if (stored.token) return `token:${stored.token}`;
+    const id = stored.record?.["id"];
+    return id === undefined ? null : `record:${String(id)}`;
   }
 
   /** URL with auto-minted token. Fails fast for non-protected files (no token issued). */
@@ -146,6 +174,16 @@ export class Files {
       xhr.send(body);
     });
   }
+}
+
+/**
+ * A one-time token is spent by the first download, so caching it hands the
+ * next caller a URL that 410s. Trust `one_time` when the server sends it;
+ * otherwise read the `uses: 1` claim the server signs into such tokens.
+ */
+function isOneTime(t: TokenResponse): boolean {
+  if (typeof t.one_time === "boolean") return t.one_time;
+  return decodeJwtPayload(t.token)?.["uses"] === 1;
 }
 
 function enc(s: string): string { return encodeURIComponent(s); }

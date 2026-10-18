@@ -182,3 +182,113 @@ describe("account flows", () => {
     expect(calls[3]!.body).toEqual({ email: "a@x.com", data: { name: "A" } });
   });
 });
+
+describe("Collection.iterate", () => {
+  /** A list endpoint that pages like the server: perPage clamped to 500 and echoed back. */
+  function pagedServer(count: number) {
+    const records = Array.from({ length: count }, (_, i) => ({ id: `r${i}` }));
+    const calls: URLSearchParams[] = [];
+    const client = makeClient((req) => {
+      const q = new URL(req.url).searchParams;
+      calls.push(q);
+      const page = Number(q.get("page") ?? 1);
+      const perPage = Math.min(Number(q.get("perPage") ?? 30), 500);
+      const skip = q.get("skipTotal") === "1";
+      const data = records.slice((page - 1) * perPage, page * perPage);
+      const totalItems = skip ? -1 : count;
+      const totalPages = skip ? -1 : Math.ceil(count / perPage);
+      return new Response(JSON.stringify({ data, page, perPage, totalItems, totalPages }), {
+        headers: { "content-type": "application/json" },
+      });
+    });
+    return { client, calls };
+  }
+
+  async function collect(client: HttpClient, opts: { perPage?: number; skipTotal?: boolean }): Promise<string[]> {
+    const { Collection } = await import("../src/collection.ts");
+    const out: string[] = [];
+    for await (const r of new Collection<{ id: string }>(client, "posts").iterate(opts)) out.push(r.id);
+    return out;
+  }
+
+  it("keeps paging under skipTotal (totalPages = -1)", async () => {
+    const { client, calls } = pagedServer(5);
+    const ids = await collect(client, { perPage: 2, skipTotal: true });
+    expect(ids).toEqual(["r0", "r1", "r2", "r3", "r4"]);
+    expect(calls.length).toBe(3);
+  });
+
+  it("measures short pages against the server's clamped perPage", async () => {
+    const { client } = pagedServer(1200);
+    expect((await collect(client, { perPage: 1000 })).length).toBe(1200);
+    expect((await collect(client, { perPage: 1000, skipTotal: true })).length).toBe(1200);
+  });
+
+  it("stops on an exact multiple under skipTotal via the empty page", async () => {
+    const { client, calls } = pagedServer(4);
+    expect((await collect(client, { perPage: 2, skipTotal: true })).length).toBe(4);
+    expect(calls.length).toBe(3);
+  });
+});
+
+describe("Files.token cache", () => {
+  const b64 = (o: unknown) => btoa(JSON.stringify(o)).replace(/=/g, "").replace(/\+/g, "-").replace(/\//g, "_");
+  const jwt = (claims: Record<string, unknown>) => `h.${b64(claims)}.s`;
+  const exp = () => Math.floor(Date.now() / 1000) + 3600;
+
+  function tokenServer(mint: (n: number) => Record<string, unknown>) {
+    let n = 0;
+    const client = makeClient(() => {
+      n++;
+      return new Response(JSON.stringify({ data: mint(n) }), { headers: { "content-type": "application/json" } });
+    });
+    return { client, minted: () => n };
+  }
+
+  it("caches a reusable token", async () => {
+    const { Files } = await import("../src/files.ts");
+    const { client, minted } = tokenServer((n) => ({ token: jwt({ filename: "a.png", jti: `j${n}` }), expires_at: exp() }));
+    const f = new Files(client);
+    await f.urlWithToken("posts", "p1", "img", "a.png");
+    await f.urlWithToken("posts", "p1", "img", "a.png");
+    expect(minted()).toBe(1);
+  });
+
+  it("never caches a one-time token (uses: 1 claim)", async () => {
+    const { Files } = await import("../src/files.ts");
+    const { client, minted } = tokenServer((n) => ({ token: jwt({ filename: "a.png", uses: 1, jti: `j${n}` }), expires_at: exp() }));
+    const f = new Files(client);
+    const a = await f.urlWithToken("posts", "p1", "img", "a.png");
+    const b = await f.urlWithToken("posts", "p1", "img", "a.png");
+    expect(minted()).toBe(2);
+    expect(a).not.toBe(b);
+  });
+
+  it("honours an explicit one_time flag from the server", async () => {
+    const { Files } = await import("../src/files.ts");
+    const { client, minted } = tokenServer((n) => ({ token: `opaque-${n}`, expires_at: exp(), one_time: true }));
+    const f = new Files(client);
+    await f.token("posts", "p1", "img", "a.png");
+    await f.token("posts", "p1", "img", "a.png");
+    expect(minted()).toBe(2);
+  });
+
+  it("drops cached tokens when the signed-in identity changes", async () => {
+    const { Files } = await import("../src/files.ts");
+    const { client, minted } = tokenServer((n) => ({ token: jwt({ filename: "a.png", jti: `j${n}` }), expires_at: exp() }));
+    const f = new Files(client);
+    const user = (id: string) => jwt({ id, collection: "users", aud: "user", exp: exp() });
+    client.authStore.set({ token: user("u1") });
+    await f.token("posts", "p1", "img", "a.png");
+    // A refreshed token for the same user keeps the cache.
+    client.authStore.set({ token: user("u1") + "x" });
+    await f.token("posts", "p1", "img", "a.png");
+    expect(minted()).toBe(1);
+    client.authStore.set({ token: user("u2") });
+    await f.token("posts", "p1", "img", "a.png");
+    expect(minted()).toBe(2);
+    client.authStore.set(null);
+    await f.token("posts", "p1", "img", "a.png");
+    expect(minted()).toBe(3);
+  });
+});

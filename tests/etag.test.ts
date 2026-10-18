@@ -118,6 +118,20 @@ describe("Collection auto-attaches If-Match", () => {
     expect(calls[0]?.headers["If-Match"]).toBe(`W/"explicit"`);
   });
 
+  it("ifMatch \"auto\" resolves from the cache, never as a literal ETag", async () => {
+    const { client, calls } = makeClient(() => new Response(JSON.stringify({ data: {} }), {
+      headers: { "content-type": "application/json" },
+    }));
+    const col = new Collection(client, "posts");
+    await col.update("p1", { title: "x" }, { ifMatch: "auto" });
+    expect(calls[0]?.headers["If-Match"]).toBeUndefined();
+    client.etags.set("posts", "p1", `W/"42"`);
+    await col.update("p1", { title: "y" }, { ifMatch: "auto" });
+    await col.delete("p1", { ifMatch: "auto" });
+    expect(calls[1]?.headers["If-Match"]).toBe(`W/"42"`);
+    expect(calls[2]?.headers["If-Match"]).toBe(`W/"42"`);
+  });
+
   it("delete auto-attaches and invalidates the cache on success", async () => {
     const { client, calls } = makeClient(() => new Response(JSON.stringify({ data: null }), {
       headers: { "content-type": "application/json" },
