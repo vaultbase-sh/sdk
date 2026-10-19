@@ -153,3 +153,66 @@ describe("realtime auth", () => {
     rt.closeNow();
   });
 });
+
+describe("realtime delivery", () => {
+  const g = globalThis as unknown as { WebSocket?: unknown };
+  const saved = g.WebSocket;
+  afterEach(() => { g.WebSocket = saved; FakeWs.last = null; });
+
+  const open = async () => {
+    g.WebSocket = FakeWs;
+    const { c } = client(() => json({ data: {} }));
+    const rt = new RealtimeManager(c);
+    return { rt, ws: async () => { await new Promise((r) => setTimeout(r, 10)); return FakeWs.last!; } };
+  };
+  const event = (collection: string, id: string, type = "update", title = "") =>
+    ({ data: JSON.stringify({ type, collection, record: { id, title } }) });
+  const topics = (ws: FakeWs, type: string) =>
+    ws.sent.filter((m) => (m as { type: string }).type === type).flatMap((m) => (m as { topics: string[] }).topics);
+
+  it("subscribe(name, '*') asks for that collection only, not every collection", async () => {
+    const { rt, ws: get } = await open();
+    rt.subscribe("posts", "*", () => {});
+    const ws = await get();
+    expect([...new Set(topics(ws, "subscribe"))]).toEqual(["posts"]);
+    rt.closeNow();
+  });
+
+  it("hands each subscription only its own collection's events", async () => {
+    const { rt, ws: get } = await open();
+    const posts: string[] = [], site: string[] = [], all: string[] = [];
+    rt.subscribe("posts", "*", (e) => posts.push(e.collection));
+    rt.subscribe("site", "*", (e) => site.push(e.collection));
+    rt.subscribe("*", "*", (e) => all.push(e.collection));
+    const ws = await get();
+    ws.emit("message", event("posts", "p1"));
+    ws.emit("message", event("site", "s1"));
+    expect(posts).toEqual(["posts"]);
+    expect(site).toEqual(["site"]);
+    expect(all).toEqual(["posts", "site"]);
+    rt.closeNow();
+  });
+
+  it("delivers every update, however close together", async () => {
+    const { rt, ws: get } = await open();
+    const titles: string[] = [];
+    rt.subscribe("posts", "p1", (e) => titles.push(String(e.record?.["title"])));
+    const ws = await get();
+    for (const t of ["one", "two", "three"]) ws.emit("message", event("posts", "p1", "update", t));
+    expect(titles).toEqual(["one", "two", "three"]);
+    rt.closeNow();
+  });
+
+  it("keeps a topic while another subscription still holds it", async () => {
+    const { rt, ws: get } = await open();
+    const seen: string[] = [];
+    const stop = rt.subscribe("posts", "p1", () => seen.push("a"));
+    rt.subscribe("posts", "p1", () => seen.push("b"));
+    const ws = await get();
+    stop();
+    expect(topics(ws, "unsubscribe")).toEqual([]);
+    ws.emit("message", event("posts", "p1"));
+    expect(seen).toEqual(["b"]);
+    rt.closeNow();
+  });
+});

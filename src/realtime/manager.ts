@@ -32,7 +32,6 @@ export class RealtimeManager {
   private attempt = 0;
   private clientId: string | null = null;
   private heartbeat: ReturnType<typeof setInterval> | null = null;
-  private dedup = new Set<string>();
   private lastToken: string | null = null;
   private stopAuthWatch: (() => void) | null = null;
 
@@ -84,13 +83,15 @@ export class RealtimeManager {
     const i = this.subs.indexOf(sub);
     if (i < 0) return;
     this.subs.splice(i, 1);
-    const topics = topicsFor(sub);
-    for (const t of topics) {
+    // Another subscription may hold the same topic; the server only hears
+    // about the ones nobody holds any more.
+    const released: string[] = [];
+    for (const t of topicsFor(sub)) {
       const n = (this.topicRefs.get(t) ?? 1) - 1;
-      if (n <= 0) this.topicRefs.delete(t);
+      if (n <= 0) { this.topicRefs.delete(t); released.push(t); }
       else this.topicRefs.set(t, n);
     }
-    this.transport?.send({ type: "unsubscribe", topics });
+    if (released.length > 0) this.transport?.send({ type: "unsubscribe", topics: released });
     if (this.subs.length === 0) this.closeNow();
   }
 
@@ -133,15 +134,15 @@ export class RealtimeManager {
     setTimeout(() => { void this.ensureConnected(); }, jitter);
   }
 
+  /**
+   * Hand an event to the subscriptions it belongs to. The server sends each
+   * event once per connection, however many of its topics match, so there's
+   * nothing to de-duplicate here: two updates to one record in quick
+   * succession are two events.
+   */
   private deliver(ev: RealtimeEvent): void {
-    // De-dupe per (id+type) within a 1s sliding window — server fans out the
-    // same event through both `<collection>` and `<collection>/<id>` topics.
-    const key = `${ev.collection}:${ev.id ?? ev.record?.["id"] ?? ""}:${ev.type}`;
-    if (this.dedup.has(key)) return;
-    this.dedup.add(key);
-    setTimeout(() => this.dedup.delete(key), 1000);
     for (const sub of this.subs) {
-      if (sub.collection !== ev.collection && sub.filter !== "*") continue;
+      if (sub.collection !== "*" && sub.collection !== ev.collection) continue;
       if (sub.filter === "*") { sub.cb(ev); continue; }
       const ids = Array.isArray(sub.filter) ? sub.filter : [sub.filter];
       const evId = ev.id ?? (ev.record?.["id"] as string | undefined);
@@ -272,7 +273,8 @@ export class RealtimeManager {
 
 /** Compute the WS topics implied by a `subscribe` call. */
 function topicsFor(sub: Sub): string[] {
-  if (sub.filter === "*") return [sub.collection, "*"];
+  // `subscribe("*", "*")` is every collection; `subscribe(name, "*")` is one.
+  if (sub.filter === "*") return [sub.collection];
   const ids = Array.isArray(sub.filter) ? sub.filter : [sub.filter];
   return ids.map((id) => `${sub.collection}/${id}`);
 }
