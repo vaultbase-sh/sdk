@@ -155,6 +155,9 @@ export class RealtimeManager {
     if (typeof globalThis.WebSocket === "undefined") throw new Error("no websocket");
     const wsUrl = this.client.baseUrl.replace(/^http/, "ws") + "/realtime";
     const ws = new globalThis.WebSocket(wsUrl);
+    // Until it opens, a failure is ensureConnected's to handle (it falls back
+    // to SSE or schedules the retry); after, a drop reconnects from here.
+    let opened = false;
     return await new Promise<Transport>((resolve, reject) => {
       const timer = setTimeout(() => {
         try { ws.close(); } catch { /* noop */ }
@@ -162,6 +165,7 @@ export class RealtimeManager {
       }, 5000);
       ws.addEventListener("open", () => {
         clearTimeout(timer);
+        opened = true;
         const stored = this.client.authStore.get();
         if (stored?.token) {
           ws.send(JSON.stringify({ type: "auth", token: stored.token }));
@@ -191,6 +195,7 @@ export class RealtimeManager {
       });
       ws.addEventListener("close", () => {
         clearTimeout(timer);
+        if (!opened) { reject(new Error("ws closed")); return; }
         this.transport = null;
         if (this.heartbeat) { clearInterval(this.heartbeat); this.heartbeat = null; }
         if (!this.closed) this.scheduleReconnect();
@@ -209,10 +214,12 @@ export class RealtimeManager {
     // POST subscriptions. Topic mutations re-POST to /api/v1/realtime.
     const url = this.client.baseUrl + "/api/v1/realtime";
     const es = new globalThis.EventSource(url, { withCredentials: true });
+    let opened = false; // as in connectWs
     return await new Promise<Transport>((resolve, reject) => {
       const timer = setTimeout(() => { try { es.close(); } catch { /* noop */ } reject(new Error("sse timeout")); }, 5000);
       es.addEventListener("connect", (ev: MessageEvent) => {
         clearTimeout(timer);
+        opened = true;
         try {
           const parsed = JSON.parse(ev.data) as { clientId?: string };
           if (parsed.clientId) this.clientId = parsed.clientId;
@@ -244,8 +251,11 @@ export class RealtimeManager {
       es.addEventListener("error", () => {
         clearTimeout(timer);
         es.close();
+        if (!opened) { reject(new Error("sse error")); return; }
+        // The stream dropped: forget it, so the reconnect opens a new one.
+        this.transport = null;
+        this.clientId = null;
         if (!this.closed) this.scheduleReconnect();
-        reject(new Error("sse error"));
       });
     });
   }

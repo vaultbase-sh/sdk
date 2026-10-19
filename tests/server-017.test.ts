@@ -243,3 +243,50 @@ describe("a 401 on a request sent without the session", () => {
     expect(store.get()?.token).toBe(token);
   });
 });
+
+class FakeEs {
+  static all: FakeEs[] = [];
+  private handlers: Record<string, Array<(e: unknown) => void>> = {};
+  closed = false;
+  constructor(public url: string) {
+    FakeEs.all.push(this);
+    setTimeout(() => this.emit("connect", { data: JSON.stringify({ clientId: `c${FakeEs.all.length}` }) }), 0);
+  }
+  addEventListener(t: string, fn: (e: unknown) => void) { (this.handlers[t] ??= []).push(fn); }
+  close() { this.closed = true; }
+  emit(t: string, e: unknown) { for (const fn of this.handlers[t] ?? []) fn(e); }
+}
+
+describe("realtime reconnects", () => {
+  const g = globalThis as unknown as { WebSocket?: unknown; EventSource?: unknown };
+  const saved = { ws: g.WebSocket, es: g.EventSource };
+  afterEach(() => { g.WebSocket = saved.ws; g.EventSource = saved.es; FakeEs.all = []; FakeWs.last = null; });
+
+  it("opens a new SSE stream after the stream drops", async () => {
+    g.WebSocket = undefined;
+    g.EventSource = FakeEs;
+    const { c } = client(() => json({ data: {} }));
+    const rt = new RealtimeManager(c);
+    rt.subscribe("posts", "*", () => {});
+    await new Promise((r) => setTimeout(r, 20));
+    expect(FakeEs.all).toHaveLength(1);
+    FakeEs.all[0]!.emit("error", {});
+    await new Promise((r) => setTimeout(r, 450));
+    expect(FakeEs.all).toHaveLength(2);
+    expect(FakeEs.all[0]!.closed).toBe(true);
+    rt.closeNow();
+  });
+
+  it("opens a new WebSocket after the socket drops", async () => {
+    g.WebSocket = FakeWs;
+    const { c } = client(() => json({ data: {} }));
+    const rt = new RealtimeManager(c);
+    rt.subscribe("posts", "*", () => {});
+    await new Promise((r) => setTimeout(r, 20));
+    const first = FakeWs.last!;
+    first.emit("close", {});
+    await new Promise((r) => setTimeout(r, 450));
+    expect(FakeWs.last).not.toBe(first);
+    rt.closeNow();
+  });
+});
