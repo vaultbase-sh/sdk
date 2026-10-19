@@ -78,6 +78,24 @@ describe("generateTypes", () => {
     expect(out).toContain("verified: boolean;");
   });
 
+  it("doesn't repeat email / verified when a snapshot lists them as implicit fields", () => {
+    const out = generateTypes({
+      collections: [{
+        name: "users",
+        type: "auth",
+        fields: [
+          { name: "email", type: "email", required: true, implicit: true, options: { unique: true } },
+          { name: "verified", type: "bool", required: false, implicit: true },
+          { name: "name", type: "text" },
+        ],
+      }],
+    } as never);
+    const record = out.slice(out.indexOf("interface UsersRecord"), out.indexOf("interface UsersCreate"));
+    expect(record.match(/\bverified\b/g)).toHaveLength(1);
+    expect(record.match(/\bemail\b/g)).toHaveLength(1);
+    expect(record).toContain("name?: string | null;");
+  });
+
   it("types date / vector / color fields and empty values as the server returns them", () => {
     const out = generateTypes({
       collections: [{

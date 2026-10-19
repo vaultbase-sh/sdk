@@ -102,7 +102,8 @@ function emitRecord(name: string, fields: SnapshotField[], col: SnapshotCollecti
   for (const f of fields) {
     if (f.system) continue;
     if (f.type === "password") continue; // never on Record
-    if (col.type === "auth" && (f.name === "email" || f.name === "password")) continue;
+    // Emitted above for every auth collection; snapshots also list them as implicit fields.
+    if (col.type === "auth" && (f.name === "email" || f.name === "password" || f.name === "verified")) continue;
     // The server stores an unset field as NULL and returns it as `null`.
     // A singleton's record starts with every field empty, required or not.
     const t = tsType(f, "read");
