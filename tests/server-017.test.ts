@@ -290,3 +290,21 @@ describe("realtime reconnects", () => {
     rt.closeNow();
   });
 });
+
+describe("aborting", () => {
+  it("the caller's own signal throws kind aborted", async () => {
+    const c = new HttpClient({
+      baseUrl: "http://localhost",
+      authStore: new MemoryAuthStore(),
+      fetch: ((_url: string, init?: RequestInit) => new Promise((_, reject) => {
+        const fail = () => reject(new DOMException("The operation was aborted.", "AbortError"));
+        if (init?.signal?.aborted) fail();
+        else init?.signal?.addEventListener("abort", fail);
+      })) as unknown as typeof fetch,
+    });
+    const ac = new AbortController();
+    const p = c.request("/api/v1/posts", { signal: ac.signal });
+    ac.abort();
+    await expect(p).rejects.toMatchObject({ data: { kind: "aborted" } });
+  });
+});

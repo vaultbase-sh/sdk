@@ -142,7 +142,7 @@ export class HttpClient {
       if (this.withCredentials) init.credentials = "include";
       res = await this.fetcher(url, init);
     } catch (e) {
-      if (cancelKey && signal?.aborted) {
+      if (signal?.aborted) { // the caller's signal, or a newer request with the same requestKey
         throw VaultbaseError.aborted();
       }
       throw VaultbaseError.network(e instanceof Error ? e.message : String(e), e);
