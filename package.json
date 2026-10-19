@@ -1,6 +1,6 @@
 {
   "name": "@vaultbase/sdk",
-  "version": "0.7.2",
+  "version": "0.7.3",
   "description": "Official TypeScript SDK for Vaultbase — typed REST + WS/SSE client",
   "type": "module",
   "main": "./dist/index.cjs",
