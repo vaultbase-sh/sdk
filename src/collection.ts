@@ -19,6 +19,13 @@ export interface ConcurrencyOptions {
   ifMatch?: string | "auto" | false;
 }
 
+export interface GetOptions extends MutationOptions {
+  /** Relations to expand, comma-separated (same syntax as `list`). Needs server 0.26.1+. */
+  expand?: string;
+  /** Fields to return, comma-separated (same syntax as `list`). Needs server 0.26.1+. */
+  fields?: string;
+}
+
 export type UpdateOptions = MutationOptions & ConcurrencyOptions;
 export type DeleteOptions = MutationOptions & ConcurrencyOptions;
 
@@ -89,8 +96,10 @@ export class Collection<
     }
   }
 
-  async get(id: string, opts: MutationOptions = {}): Promise<R> {
-    return await this.client.request<R>(`/api/v1/${this.encName()}/${enc(id)}`, opts);
+  async get(id: string, opts: GetOptions = {}): Promise<R> {
+    const { expand, fields, ...rest } = opts;
+    const query: Record<string, string | undefined> = { expand, fields };
+    return await this.client.request<R>(`/api/v1/${this.encName()}/${enc(id)}`, { query, ...rest });
   }
 
   async create(body: C, opts: MutationOptions = {}): Promise<R> {

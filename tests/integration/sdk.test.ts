@@ -71,6 +71,13 @@ d("integration — SDK ↔ live Vaultbase", () => {
     await vb.collection("posts").delete(created.id);
   });
 
+  it("get(id) takes fields and expand", async () => {
+    const created = await vb.collection<PostRecord>("posts").create({ title: "shaped", body: "<p>long</p>" });
+    const slim = await vb.collection<PostRecord>("posts").get(created.id, { fields: "title" });
+    expect(slim).toEqual({ id: created.id, title: "shaped" } as PostRecord);
+    await vb.collection("posts").delete(created.id);
+  });
+
   it("paginates via iterate() generator", async () => {
     for (let i = 0; i < 25; i++) {
       await vb.collection<PostRecord>("posts").create({ title: `gen-${i}` });

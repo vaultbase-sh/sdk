@@ -131,3 +131,17 @@ describe("vb.singleton()", () => {
     await vb.singleton<{ id: string; n: number }>("other").get();
   });
 });
+
+describe("collection.get() options", () => {
+  it("sends expand and fields as query params", async () => {
+    const { vb, calls } = makeVb(() => json({ data: { id: "p1", title: "t" } }));
+    await vb.collection("posts").get("p1", { expand: "author", fields: "id,title" });
+    expect(calls[0]!.url).toBe("http://localhost/api/v1/posts/p1?expand=author&fields=id%2Ctitle");
+  });
+
+  it("sends no query without them", async () => {
+    const { vb, calls } = makeVb(() => json({ data: { id: "p1", title: "t" } }));
+    await vb.collection("posts").get("p1");
+    expect(calls[0]!.url).toBe("http://localhost/api/v1/posts/p1");
+  });
+});
