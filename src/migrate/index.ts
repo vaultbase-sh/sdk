@@ -18,8 +18,9 @@ export interface SnapshotEnvelope {
 export interface DiffEntry {
   /** "create" — new in source, missing on target.
    *  "update" — present in both but differs (rules / fields / view query).
-   *  "unchanged" — already in sync. */
-  kind: "create" | "update" | "unchanged";
+   *  "unchanged" — already in sync.
+   *  "remove" — on the target only; no apply mode deletes it. */
+  kind: "create" | "update" | "unchanged" | "remove";
   collection: string;
   /** Human-readable list of differences for `update` kind. Empty otherwise. */
   changes?: string[];
@@ -70,8 +71,26 @@ export async function diffSnapshot(snapshot: SnapshotEnvelope, opts: RemoteOpts)
     body: JSON.stringify({ snapshot }),
   });
   if (!res.ok) throw new Error(`diff failed: ${res.status} ${res.statusText}`);
-  const data = await res.json();
-  return unwrap(data) as DiffEntry[];
+  return toDiffEntries(unwrap(await res.json()));
+}
+
+interface ServerDiff {
+  added?: Array<{ name: string }>;
+  modified?: Array<{ name: string; changes?: string[] }>;
+  unchanged?: Array<{ name: string }>;
+  removed?: Array<{ name: string }>;
+}
+
+/** The server answers `{ added, modified, unchanged, removed }`; flatten it. */
+export function toDiffEntries(v: unknown): DiffEntry[] {
+  if (Array.isArray(v)) return v as DiffEntry[];
+  const d = (v ?? {}) as ServerDiff;
+  return [
+    ...(d.added ?? []).map((c): DiffEntry => ({ kind: "create", collection: c.name })),
+    ...(d.modified ?? []).map((c): DiffEntry => ({ kind: "update", collection: c.name, changes: c.changes ?? [] })),
+    ...(d.unchanged ?? []).map((c): DiffEntry => ({ kind: "unchanged", collection: c.name })),
+    ...(d.removed ?? []).map((c): DiffEntry => ({ kind: "remove", collection: c.name })),
+  ];
 }
 
 /** Apply `snapshot` to the target server. `mode` is `"additive"` (safe; create-only) or `"sync"`. */
@@ -85,8 +104,14 @@ export async function applySnapshot(
     body: JSON.stringify({ snapshot, mode: opts.mode ?? "additive" }),
   });
   if (!res.ok) throw new Error(`apply failed: ${res.status} ${res.statusText}`);
-  const data = await res.json();
-  return unwrap(data) as ApplyResult;
+  const r = (unwrap(await res.json()) ?? {}) as Partial<Omit<ApplyResult, "errors">> & { errors?: Array<{ collection: string; message?: string; error?: string }> };
+  return {
+    created: r.created ?? [],
+    updated: r.updated ?? [],
+    skipped: r.skipped ?? [],
+    // The server names the message `error`.
+    errors: (r.errors ?? []).map((e) => ({ collection: e.collection, message: e.message ?? e.error ?? "" })),
+  };
 }
 
 /**

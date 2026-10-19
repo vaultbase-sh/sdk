@@ -98,16 +98,17 @@ async function loadSchema(p: string): Promise<SnapshotEnvelope> {
   return inner as SnapshotEnvelope;
 }
 
-function summarizeDiff(entries: DiffEntry[]): { creates: DiffEntry[]; updates: DiffEntry[]; unchanged: DiffEntry[] } {
+function summarizeDiff(entries: DiffEntry[]): { creates: DiffEntry[]; updates: DiffEntry[]; unchanged: DiffEntry[]; removes: DiffEntry[] } {
   return {
     creates: entries.filter((e) => e.kind === "create"),
     updates: entries.filter((e) => e.kind === "update"),
     unchanged: entries.filter((e) => e.kind === "unchanged"),
+    removes: entries.filter((e) => e.kind === "remove"),
   };
 }
 
 function printDiff(entries: DiffEntry[]): void {
-  const { creates, updates, unchanged } = summarizeDiff(entries);
+  const { creates, updates, unchanged, removes } = summarizeDiff(entries);
   process.stdout.write(`Diff:\n`);
   process.stdout.write(`  creates:   ${creates.length}\n`);
   process.stdout.write(`  updates:   ${updates.length}\n`);
@@ -117,6 +118,7 @@ function printDiff(entries: DiffEntry[]): void {
     process.stdout.write(`  ~ ${u.collection}\n`);
     for (const ch of u.changes ?? []) process.stdout.write(`      ${ch}\n`);
   }
+  for (const r of removes) process.stdout.write(`  - ${r.collection}  (only on the server; not deleted)\n`);
 }
 
 function requireFlag<T>(name: string, v: T | undefined): T {

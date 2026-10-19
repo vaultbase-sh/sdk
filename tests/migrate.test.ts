@@ -61,6 +61,33 @@ describe("migrate API", () => {
     expect(sent.snapshot.version).toBe(1);
   });
 
+  it("diffSnapshot reads the server's { added, modified, unchanged, removed }", async () => {
+    const fetch = mockFetch(() => new Response(JSON.stringify({
+      data: {
+        added: [{ name: "posts", type: "base" }],
+        modified: [{ name: "users", type: "auth", changes: ["field added: avatar"] }],
+        unchanged: [{ name: "settings" }],
+        removed: [{ name: "legacy" }],
+      },
+    }), { headers: { "content-type": "application/json" } }));
+    const diff = await diffSnapshot(sampleSnapshot, { url: "https://x", adminToken: "t", fetch });
+    expect(diff).toEqual([
+      { kind: "create", collection: "posts" },
+      { kind: "update", collection: "users", changes: ["field added: avatar"] },
+      { kind: "unchanged", collection: "settings" },
+      { kind: "remove", collection: "legacy" },
+    ]);
+  });
+
+  it("applySnapshot reads the server's error shape", async () => {
+    const fetch = mockFetch(() => new Response(JSON.stringify({
+      data: { created: [], updated: [], unchanged: ["a"], skipped: ["a"], errors: [{ collection: "b", error: "bad rule" }] },
+    }), { headers: { "content-type": "application/json" } }));
+    const r = await applySnapshot(sampleSnapshot, { url: "https://x", adminToken: "t", fetch });
+    expect(r.errors).toEqual([{ collection: "b", message: "bad rule" }]);
+    expect(r.skipped).toEqual(["a"]);
+  });
+
   it("applySnapshot defaults to additive mode", async () => {
     let sentMode: string | undefined;
     const fetch = mockFetch((_url, init) => {
