@@ -176,7 +176,8 @@ export class CollectionAuth<R = AnyRecord> {
     return await this.client.request(`/api/v1/auth/${enc(this.collection)}/totp/setup`, { method: "POST" });
   }
 
-  async totpConfirm(code: string): Promise<{ enabled: true }> {
+  /** Turn TOTP on. The answer carries the first set of recovery codes: show them once. */
+  async totpConfirm(code: string): Promise<{ enabled: true; recovery_codes: string[] }> {
     return await this.client.request(`/api/v1/auth/${enc(this.collection)}/totp/confirm`, {
       method: "POST",
       body: { code },

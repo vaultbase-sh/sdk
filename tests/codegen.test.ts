@@ -66,7 +66,7 @@ describe("generateTypes", () => {
     expect(out).toContain("covers?: string[]");
   });
 
-  it("auth collection injects email + verified on Record", () => {
+  it("auth collection injects email and the account flags as the server returns them", () => {
     const out = generateTypes({
       collections: [{
         name: "users",
@@ -75,7 +75,9 @@ describe("generateTypes", () => {
       }],
     });
     expect(out).toContain("email: string;");
-    expect(out).toContain("verified: boolean;");
+    expect(out).toContain("email_verified: number;");
+    expect(out).toContain("is_anonymous: number;");
+    expect(out).not.toMatch(/\bverified: boolean/);
   });
 
   it("doesn't repeat email / verified when a snapshot lists them as implicit fields", () => {
@@ -91,7 +93,8 @@ describe("generateTypes", () => {
       }],
     } as never);
     const record = out.slice(out.indexOf("interface UsersRecord"), out.indexOf("interface UsersCreate"));
-    expect(record.match(/\bverified\b/g)).toHaveLength(1);
+    expect(record.match(/\bverified\b/g)).toBeNull();
+    expect(record.match(/\bemail_verified\b/g)).toHaveLength(1);
     expect(record.match(/\bemail\b/g)).toHaveLength(1);
     expect(record).toContain("name?: string | null;");
   });

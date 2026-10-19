@@ -7,7 +7,7 @@
  * leave half-finished types on disk.
  */
 
-import { generateTypes, type SnapshotCollection, type SnapshotShape } from "./generate.ts";
+import { generateTypes, headerFor, type SnapshotCollection, type SnapshotShape } from "./generate.ts";
 import { promises as fs } from "node:fs";
 import { resolve, dirname } from "node:path";
 
@@ -85,7 +85,11 @@ function normalize(data: unknown): SnapshotShape {
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
   const snapshot = await loadSnapshot(args);
-  const ts = generateTypes(snapshot);
+  // The command as run, minus the token: `--admin-token=…` / `--admin-token …`.
+  const argv = process.argv.slice(2).map((a, i, all) =>
+    a.startsWith("--admin-token=") ? "--admin-token=$ADMIN_TOKEN"
+      : all[i - 1] === "--admin-token" ? "$ADMIN_TOKEN" : a);
+  const ts = generateTypes(snapshot, { header: headerFor(["vb-types", ...argv].join(" ")) });
   const outAbs = resolve(args.out);
   await fs.mkdir(dirname(outAbs), { recursive: true });
   const tmp = `${outAbs}.tmp`;
