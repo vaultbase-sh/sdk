@@ -15,12 +15,14 @@ import type {
   AnyRecord,
   CollectionTypes,
   DefaultSchema,
+  FileMeta,
   ListOptions,
   ListResponse,
   RealtimeEvent,
   SingletonKeys,
   SubscribeCallback,
   SubscribeFilter,
+  UploadOptions,
 } from "./types.ts";
 
 export interface VaultbaseOptions extends Partial<Omit<ClientOptions, "baseUrl">> {
@@ -191,10 +193,12 @@ export type {
   AnyRecord,
   CollectionTypes,
   DefaultSchema,
+  FileMeta,
   ListOptions,
   ListResponse,
   RealtimeEvent,
   SingletonKeys,
   SubscribeCallback,
   SubscribeFilter,
+  UploadOptions,
 };

@@ -36,7 +36,7 @@ export interface FieldRef { readonly __field: string }
  * Use inside `q` to interpolate a column / dotted-path identifier without quotes.
  *
  *   q`${field("status")} = ${"published"}`
- *   q`${field("author.id")} = ${userId}`
+ *   q`${field("meta.color")} = ${"red"}`   // a path inside a json field
  */
 export function field(name: string): FieldRef {
   if (!IDENT_PATH_RE.test(name)) throw new Error(`field(): invalid identifier "${name}"`);

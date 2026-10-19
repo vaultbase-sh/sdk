@@ -33,7 +33,13 @@ export class Files {
 
   constructor(private readonly client: HttpClient) {}
 
-  /** Upload one or more files. Multi-file fields accept `File[]`. */
+  /**
+   * Upload one or more files to an existing record. Multi-file fields accept
+   * `File[]`. The upload only stores the file: set the field to the returned
+   * `filename` (an update) to attach it.
+   */
+  async upload(collection: string, recordId: string, field: string, file: File, opts?: UploadOptions): Promise<FileMeta>;
+  async upload(collection: string, recordId: string, field: string, file: File[], opts?: UploadOptions): Promise<FileMeta[]>;
   async upload(
     collection: string,
     recordId: string,
