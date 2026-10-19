@@ -216,3 +216,20 @@ describe("realtime delivery", () => {
     rt.closeNow();
   });
 });
+
+describe("sessions stay per client", () => {
+  it("one client's 401 or refresh doesn't touch another client's session", async () => {
+    const a = client(() => json({ error: "Unauthorized", code: 401 }, 401));
+    const b = client((req) =>
+      new URL(req.url).pathname === "/api/v1/auth/refresh" ? json({ data: { token: jwt(7200) } }) : json({ data: {} }));
+    a.store.set({ token: jwt(3600) });
+    const bToken = jwt(3600);
+    b.store.set({ token: bToken });
+    await a.c.request("/api/v1/posts").catch(() => {});
+    expect(a.store.get()).toBeNull();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(b.store.get()?.token).toBe(bToken);
+    await b.c.refresher.refreshOnce();
+    expect(a.store.get()).toBeNull();
+  });
+});
