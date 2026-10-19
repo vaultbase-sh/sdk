@@ -65,7 +65,8 @@ export class FlagsClient {
       // unwraps that envelope, so `res` is the flag map itself.
       const res = await this.client.request<Record<string, FlagValue> | null>(
         "/api/v1/flags/evaluate",
-        { method: "POST", body: { context: this.context }, skipAuth: true },
+        // With the session, so rules on `auth.*` see the signed-in user.
+        { method: "POST", body: { context: this.context } },
       );
       const next = res && typeof res === "object" ? res : {};
       const changed = diffKeys(this.cache, next);

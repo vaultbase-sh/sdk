@@ -201,6 +201,9 @@ export class HttpClient {
     }
 
     if (res.status === 401) {
+      // A request sent without the session says nothing about the session:
+      // keep it (vb.flags with public evaluation off used to sign users out).
+      if (options.skipAuth) throw VaultbaseError.auth("invalid", extractMessage(data) ?? "Unauthorized");
       // Try a single refresh+retry for non-auth-flow paths.
       if (!options.skipAuth && !options.retried && !path.endsWith("/api/v1/auth/refresh")) {
         const ok = await this.refresher.refreshOnce().catch(() => false);

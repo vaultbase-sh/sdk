@@ -233,3 +233,13 @@ describe("sessions stay per client", () => {
     expect(a.store.get()).toBeNull();
   });
 });
+
+describe("a 401 on a request sent without the session", () => {
+  it("keeps the session (vb.flags with public evaluation off used to sign users out)", async () => {
+    const { c, store } = client(() => json({ error: "Unauthorized", code: 401 }, 401));
+    const token = jwt(3600);
+    store.set({ token });
+    await expect(c.request("/api/v1/flags/evaluate", { method: "POST", body: {}, skipAuth: true })).rejects.toThrow();
+    expect(store.get()?.token).toBe(token);
+  });
+});
