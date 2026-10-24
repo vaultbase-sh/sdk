@@ -78,10 +78,22 @@ export class Batch<
     query?: ListOptions,
   ): Batch<S, [...R, BatchOpResult<ListResponse<AnyRecord>>]>;
   list(collection: string, query: ListOptions = {}): Batch<S, readonly BatchOpResult[]> {
+    // The same parameters as Collection.list: copying every key sent
+    // skipTotal as "true" (the server wants "1") and put requestKey and
+    // signal in the URL.
     const params = new URLSearchParams();
-    for (const [k, v] of Object.entries(query)) {
-      if (v === undefined || v === null) continue;
-      params.set(k, String(v));
+    const values: Record<string, string | number | undefined> = {
+      page: query.page,
+      perPage: query.perPage,
+      filter: query.filter,
+      sort: query.sort,
+      expand: query.expand,
+      fields: query.fields,
+      skipTotal: query.skipTotal ? "1" : undefined,
+      search: query.search,
+    };
+    for (const [k, v] of Object.entries(values)) {
+      if (v !== undefined) params.set(k, String(v));
     }
     const qs = params.toString();
     this.ops.push({ method: "GET", url: `/api/v1/${enc(collection)}${qs ? `?${qs}` : ""}` });

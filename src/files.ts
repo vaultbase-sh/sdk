@@ -64,8 +64,8 @@ export class Files {
   }
 
   /**
-   * Build a public URL for a stored filename. For `protected` fields the
-   * URL includes a `?token=…` minted on demand.
+   * Build the URL of a stored filename. Protected files need a token: use
+   * {@link urlWithToken} for those.
    */
   url(filename: string, params: FileUrlParams = {}): string {
     const u = new URL(`/api/v1/files/${enc(filename)}`, this.client.baseUrl + "/");

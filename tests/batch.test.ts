@@ -55,3 +55,21 @@ describe("Batch", () => {
     void body;
   });
 });
+
+describe("Batch.list query", () => {
+  it("sends list options like Collection.list, and nothing else", async () => {
+    let sent: { requests: Array<{ url: string }> } | null = null;
+    const b = new Batch(client((req) => {
+      void req.json().then((j) => { sent = j as typeof sent; });
+      return new Response(JSON.stringify({ data: [] }), { headers: { "content-type": "application/json" } });
+    }));
+    b.list("posts", { perPage: 5, skipTotal: true, requestKey: "k", filter: 'a = "b"' });
+    await b.run();
+    await Promise.resolve();
+    const url = new URL(sent!.requests[0]!.url, "http://x");
+    expect(url.searchParams.get("skipTotal")).toBe("1");
+    expect(url.searchParams.get("perPage")).toBe("5");
+    expect(url.searchParams.get("filter")).toBe('a = "b"');
+    expect(url.searchParams.has("requestKey")).toBe(false);
+  });
+});

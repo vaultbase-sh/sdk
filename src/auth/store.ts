@@ -12,7 +12,7 @@
 
 export interface StoredAuth {
   token: string;
-  /** Optional record blob — login responses include the auth record; SDK keeps it for `vb.auth.user()`. */
+  /** The signed-in user or admin record, from the sign-in response. */
   record?: Record<string, unknown>;
 }
 

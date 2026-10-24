@@ -328,8 +328,23 @@ export class AdminAuth {
 export class SharedAuth {
   constructor(private readonly client: HttpClient) {}
 
+  /**
+   * Swap the token for a new one and store it. The server revokes the old
+   * token, so a refresh that only returned the new one left the stored
+   * session dead.
+   */
   async refresh(): Promise<{ token: string }> {
-    return await this.client.request("/api/v1/auth/refresh", { method: "POST" });
+    const data = await this.client.request<{ token: string }>("/api/v1/auth/refresh", {
+      method: "POST",
+      // The proactive refresh would refresh first, then this would again.
+      skipRefresh: true,
+      requestKey: null,
+    });
+    if (data?.token) {
+      const prev = this.client.authStore.get();
+      this.client.authStore.set({ token: data.token, ...(prev?.record ? { record: prev.record } : {}) });
+    }
+    return data;
   }
 
   async logout(): Promise<void> {
