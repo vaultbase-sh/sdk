@@ -218,6 +218,15 @@ Live mode (dev only):
 npx vb-types --url=https://api.example.com --admin-token=$VB_ADMIN
 ```
 
+Dart (for the `vaultbase` Dart / Flutter package): `--lang dart` writes
+record classes with typed getters, create classes, and
+`vb.collections.<name>`. The file is run through `dart format` when the
+Dart SDK is on PATH.
+
+```bash
+npx vb-types --lang dart --schema=./vaultbase-schema.json --out=./lib/vaultbase_schema.g.dart
+```
+
 ## Schema migrations — `vb-migrate`
 
 Diff and apply schema snapshots between environments. Three subcommands hit

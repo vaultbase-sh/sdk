@@ -8,18 +8,21 @@
  */
 
 import { generateTypes, headerFor, type SnapshotCollection, type SnapshotShape } from "./generate.ts";
+import { generateDart } from "./dart.ts";
 import { promises as fs } from "node:fs";
 import { resolve, dirname } from "node:path";
+import { spawnSync } from "node:child_process";
 
 interface Args {
   schema?: string;
   url?: string;
   adminToken?: string;
-  out: string;
+  lang: "ts" | "dart";
+  out?: string;
 }
 
 function parseArgs(argv: string[]): Args {
-  const args: Args = { out: "./vaultbase-schema.gen.ts" };
+  const args: Args = { lang: "ts" };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i] ?? "";
     if (a.startsWith("--schema=")) args.schema = a.slice("--schema=".length);
@@ -28,6 +31,8 @@ function parseArgs(argv: string[]): Args {
     else if (a === "--url") { const v = argv[++i]; if (v) args.url = v; }
     else if (a.startsWith("--admin-token=")) args.adminToken = a.slice("--admin-token=".length);
     else if (a === "--admin-token") { const v = argv[++i]; if (v) args.adminToken = v; }
+    else if (a.startsWith("--lang=")) args.lang = parseLang(a.slice("--lang=".length));
+    else if (a === "--lang") args.lang = parseLang(argv[++i] ?? "");
     else if (a.startsWith("--out=")) args.out = a.slice("--out=".length);
     else if (a === "--out" || a === "-o") { const next = argv[++i]; if (next) args.out = next; }
     else if (a === "--help" || a === "-h") { printUsage(); process.exit(0); }
@@ -35,12 +40,18 @@ function parseArgs(argv: string[]): Args {
   return args;
 }
 
+function parseLang(v: string): "ts" | "dart" {
+  if (v === "ts" || v === "dart") return v;
+  throw new Error(`--lang must be ts or dart (got "${v}")`);
+}
+
 function printUsage(): void {
   process.stdout.write(
-    `vb-types — generate TypeScript types from a Vaultbase schema\n\n` +
+    `vb-types — generate TypeScript or Dart types from a Vaultbase schema\n\n` +
     `Usage:\n` +
     `  vb-types --schema=./vaultbase-schema.json [--out=./vaultbase-schema.gen.ts]\n` +
-    `  vb-types --url=https://api.example.com --admin-token=$TOKEN [--out=./types.gen.ts]\n\n` +
+    `  vb-types --url=https://api.example.com --admin-token=$TOKEN [--out=./types.gen.ts]\n` +
+    `  vb-types --lang=dart --schema=./vaultbase-schema.json [--out=./lib/vaultbase_schema.g.dart]\n\n` +
     `Snapshot mode is the default and recommended for CI. Snapshot the schema\n` +
     `via:\n` +
     `  curl -H "Authorization: Bearer $ADMIN" \\\n` +
@@ -89,12 +100,20 @@ async function main(): Promise<void> {
   const argv = process.argv.slice(2).map((a, i, all) =>
     a.startsWith("--admin-token=") ? "--admin-token=$ADMIN_TOKEN"
       : all[i - 1] === "--admin-token" ? "$ADMIN_TOKEN" : a);
-  const ts = generateTypes(snapshot, { header: headerFor(["vb-types", ...argv].join(" ")) });
-  const outAbs = resolve(args.out);
+  const header = headerFor(["vb-types", ...argv].join(" "));
+  const source = args.lang === "dart"
+    ? generateDart(snapshot, { header })
+    : generateTypes(snapshot, { header });
+  const outAbs = resolve(args.out ?? (args.lang === "dart" ? "./lib/vaultbase_schema.g.dart" : "./vaultbase-schema.gen.ts"));
   await fs.mkdir(dirname(outAbs), { recursive: true });
   const tmp = `${outAbs}.tmp`;
-  await fs.writeFile(tmp, ts, "utf8");
+  await fs.writeFile(tmp, source, "utf8");
   await fs.rename(tmp, outAbs);
+  // Formatted the way `dart format` would, when the Dart SDK is on PATH, so
+  // a format check in CI passes. Without it the file is still valid Dart.
+  if (args.lang === "dart") {
+    try { spawnSync("dart", ["format", outAbs], { stdio: "ignore" }); } catch { /* no Dart SDK */ }
+  }
   process.stdout.write(`vb-types: wrote ${outAbs} (${snapshot.collections.length} collections)\n`);
 }
 
