@@ -24,6 +24,8 @@ export interface GetOptions extends MutationOptions {
   expand?: string;
   /** Fields to return, comma-separated (same syntax as `list`). Needs server 0.26.1+. */
   fields?: string;
+  /** Fields to leave out, comma-separated; applied after `fields`. Needs server 0.31.0+. */
+  exclude?: string;
 }
 
 export type UpdateOptions = MutationOptions & ConcurrencyOptions;
@@ -51,6 +53,7 @@ export class Collection<
       sort: options.sort,
       expand: options.expand,
       fields: options.fields,
+      exclude: options.exclude,
       skipTotal: options.skipTotal ? "1" : undefined,
       search: options.search,
     };
@@ -97,8 +100,8 @@ export class Collection<
   }
 
   async get(id: string, opts: GetOptions = {}): Promise<R> {
-    const { expand, fields, ...rest } = opts;
-    const query: Record<string, string | undefined> = { expand, fields };
+    const { expand, fields, exclude, ...rest } = opts;
+    const query: Record<string, string | undefined> = { expand, fields, exclude };
     return await this.client.request<R>(`/api/v1/${this.encName()}/${enc(id)}`, { query, ...rest });
   }
 

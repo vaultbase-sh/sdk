@@ -72,4 +72,23 @@ describe("Batch.list query", () => {
     expect(url.searchParams.get("filter")).toBe('a = "b"');
     expect(url.searchParams.has("requestKey")).toBe(false);
   });
+
+  it("sends expand, fields and exclude on get, and a bare path without them", async () => {
+    let sent: { requests: Array<{ url: string }> } | null = null;
+    const b = new Batch(client((req) => {
+      void req.json().then((j) => { sent = j as typeof sent; });
+      return new Response(JSON.stringify({ data: [] }), { headers: { "content-type": "application/json" } });
+    }));
+    b.get("posts", "p1", { expand: "author", exclude: "body,meta" }).get("posts", "p2").list("posts", { exclude: "body" });
+    await b.run();
+    await Promise.resolve();
+    const [one, bare, list] = sent!.requests.map((r) => r.url);
+    const u = new URL(one!, "http://x");
+    expect(u.pathname).toBe("/api/v1/posts/p1");
+    expect(u.searchParams.get("expand")).toBe("author");
+    expect(u.searchParams.get("exclude")).toBe("body,meta");
+    expect(u.searchParams.has("fields")).toBe(false);
+    expect(bare).toBe("/api/v1/posts/p2");
+    expect(new URL(list!, "http://x").searchParams.get("exclude")).toBe("body");
+  });
 });

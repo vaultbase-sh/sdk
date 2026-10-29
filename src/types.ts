@@ -46,6 +46,8 @@ export interface ListOptions {
   sort?: string;
   expand?: string;
   fields?: string;
+  /** Fields to leave out, comma-separated; applied after `fields`, `id` always returned. Needs server 0.31.0+. */
+  exclude?: string;
   skipTotal?: boolean;
   /**
    * Full-text search over the collection's searchable fields (server

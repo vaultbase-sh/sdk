@@ -19,6 +19,13 @@ export interface BatchOpResult<B = unknown> {
 /** Result of `delete()` ops — server returns 204 with no body. */
 export type BatchDeleteResult = BatchOpResult<null>;
 
+/** `expand`, `fields` and `exclude` on a batched get-one (server 0.31.0+). */
+export interface BatchGetOptions {
+  expand?: string;
+  fields?: string;
+  exclude?: string;
+}
+
 /**
  * Typed batch builder. Generic params:
  *   S — Schema map (codegen-emitted)
@@ -62,10 +69,16 @@ export class Batch<
   get<K extends keyof S & string>(
     collection: K,
     id: string,
+    query?: BatchGetOptions,
   ): Batch<S, [...R, BatchOpResult<S[K]["record"]>]>;
-  get(collection: string, id: string): Batch<S, [...R, BatchOpResult<AnyRecord>]>;
-  get(collection: string, id: string): Batch<S, readonly BatchOpResult[]> {
-    this.ops.push({ method: "GET", url: `/api/v1/${enc(collection)}/${enc(id)}` });
+  get(collection: string, id: string, query?: BatchGetOptions): Batch<S, [...R, BatchOpResult<AnyRecord>]>;
+  get(collection: string, id: string, query: BatchGetOptions = {}): Batch<S, readonly BatchOpResult[]> {
+    const params = new URLSearchParams();
+    for (const [k, v] of Object.entries({ expand: query.expand, fields: query.fields, exclude: query.exclude })) {
+      if (v !== undefined && v !== "") params.set(k, v);
+    }
+    const qs = params.toString();
+    this.ops.push({ method: "GET", url: `/api/v1/${enc(collection)}/${enc(id)}${qs ? `?${qs}` : ""}` });
     return this as unknown as Batch<S, readonly BatchOpResult[]>;
   }
 
@@ -89,6 +102,7 @@ export class Batch<
       sort: query.sort,
       expand: query.expand,
       fields: query.fields,
+      exclude: query.exclude,
       skipTotal: query.skipTotal ? "1" : undefined,
       search: query.search,
     };

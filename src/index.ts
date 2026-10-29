@@ -161,7 +161,7 @@ export { HttpClient, EtagCache } from "./client.ts";
 export { Collection, type ConcurrencyOptions, type GetOptions, type UpdateOptions, type DeleteOptions } from "./collection.ts";
 export { Singleton, type SingletonGetOptions, type SingletonFor } from "./singleton.ts";
 export { Files, type FileUrlParams } from "./files.ts";
-export { Batch, type BatchOpResult, type BatchDeleteResult, type BatchResult } from "./batch.ts";
+export { Batch, type BatchGetOptions, type BatchOpResult, type BatchDeleteResult, type BatchResult } from "./batch.ts";
 export { Custom } from "./custom.ts";
 export { q, field, rawFilter, type Filter } from "./filter.ts";
 export { RealtimeManager } from "./realtime/manager.ts";

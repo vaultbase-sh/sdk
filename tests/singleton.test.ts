@@ -139,6 +139,18 @@ describe("collection.get() options", () => {
     expect(calls[0]!.url).toBe("http://localhost/api/v1/posts/p1?expand=author&fields=id%2Ctitle");
   });
 
+  it("sends exclude on get, list and singleton get", async () => {
+    const { vb, calls } = makeVb((cap) => json(cap.url.includes("/posts?") ? { data: [], page: 1, perPage: 30, totalItems: 0, totalPages: 0 } : { data: { id: "p1" } }));
+    await vb.collection("posts").get("p1", { exclude: "body,meta" });
+    await vb.collection("posts").list({ fields: "id,title,body", exclude: "body" });
+    await vb.singleton("settings").get({ exclude: "theme" });
+    expect(calls[0]!.url).toBe("http://localhost/api/v1/posts/p1?exclude=body%2Cmeta");
+    const list = new URL(calls[1]!.url);
+    expect(list.searchParams.get("fields")).toBe("id,title,body");
+    expect(list.searchParams.get("exclude")).toBe("body");
+    expect(new URL(calls[2]!.url).searchParams.get("exclude")).toBe("theme");
+  });
+
   it("sends no query without them", async () => {
     const { vb, calls } = makeVb(() => json({ data: { id: "p1", title: "t" } }));
     await vb.collection("posts").get("p1");

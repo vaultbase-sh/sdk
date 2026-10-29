@@ -7,6 +7,8 @@ export interface SingletonGetOptions extends MutationOptions {
   expand?: string;
   /** Fields to return, comma-separated (same syntax as `list`). */
   fields?: string;
+  /** Fields to leave out, comma-separated; applied after `fields`. Needs server 0.31.0+. */
+  exclude?: string;
 }
 
 /**
@@ -27,8 +29,8 @@ export class Singleton<R = AnyRecord, U = AnyRecord> {
 
   /** Read the record. Caches its ETag for the next `update`. */
   async get(opts: SingletonGetOptions = {}): Promise<R> {
-    const { expand, fields, ...rest } = opts;
-    const query: Record<string, string | undefined> = { expand, fields };
+    const { expand, fields, exclude, ...rest } = opts;
+    const query: Record<string, string | undefined> = { expand, fields, exclude };
     return await this.client.request<R>(this.path(), {
       query,
       ...rest,
