@@ -153,4 +153,30 @@ describe("generateTypes", () => {
     expect(out).toContain("posts: { record: PostsRecord; create: PostsCreate; update: PostsUpdate };");
     expect(out).not.toContain("singleton");
   });
+  it("types group fields as their items, list and single object", () => {
+    const out = generateTypes({
+      collections: [{
+        name: "orders",
+        type: "base",
+        fields: JSON.stringify([
+          { name: "items", type: "group", required: true, options: { fields: [
+            { name: "sku", type: "text", required: true },
+            { name: "qty", type: "number", required: true },
+            { name: "size", type: "select", options: { values: ["S", "M"] } },
+            { name: "due", type: "date" },
+          ] } },
+          { name: "address", type: "group", options: { multiple: false, fields: [
+            { name: "city", type: "text", required: true },
+            { name: "zip", type: "text" },
+          ] } },
+        ]),
+      }],
+    });
+    const record = out.slice(out.indexOf("export interface OrdersRecord"), out.indexOf("export interface OrdersCreate"));
+    const create = out.slice(out.indexOf("export interface OrdersCreate"));
+    expect(record).toContain('items: Array<{ id: string; sku: string; qty: number; size?: "S" | "M"; due?: number }>;');
+    expect(record).toContain("address?: { city: string; zip?: string } | null;");
+    expect(create).toContain('items: Array<{ id?: string | null; sku: string; qty: number; size?: "S" | "M" | null; due?: string | number | null }>;');
+    expect(create).toContain("address?: { city: string; zip?: string | null } | null;");
+  });
 });

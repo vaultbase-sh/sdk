@@ -184,9 +184,31 @@ function tsType(f: SnapshotField, mode: "read" | "write"): string {
     }
     case "password":
       return "string";
+    case "group":
+      return groupType(f, mode);
     default:
       return "unknown";
   }
+}
+
+/**
+ * A group's items: a list of objects with an `id` each, or one object with
+ * `multiple: false`. Reads leave out empty subfields; writes may omit the id
+ * (the server assigns one) and clear an optional subfield with `null`.
+ */
+function groupType(f: SnapshotField, mode: "read" | "write"): string {
+  const opts = (f.options ?? {}) as { multiple?: boolean; fields?: SnapshotField[] };
+  const list = opts.multiple !== false;
+  const members: string[] = [];
+  if (list) members.push(mode === "read" ? "id: string" : "id?: string | null");
+  for (const sub of Array.isArray(opts.fields) ? opts.fields : []) {
+    if (!sub || typeof sub.name !== "string") continue;
+    const t = tsType(sub, mode);
+    if (sub.required) members.push(`${quoteKey(sub.name)}: ${t}`);
+    else members.push(mode === "read" ? `${quoteKey(sub.name)}?: ${t}` : `${quoteKey(sub.name)}?: ${t} | null`);
+  }
+  const item = members.length > 0 ? `{ ${members.join("; ")} }` : "Record<string, never>";
+  return list ? `Array<${item}>` : item;
 }
 
 function quoteKey(s: string): string {
