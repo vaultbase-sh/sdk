@@ -40,7 +40,7 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           # Same pinned runtime as the server's CI and releases.
-          bun-version: 1.4.2
+          bun-version: 1.4.4
 
       - name: Install SDK dependencies
         working-directory: sdk
