@@ -73,6 +73,25 @@ describe("HttpClient.request", () => {
     }
   });
 
+  it("translates a maintenance-mode 503 into maintenance, with the retry hint from the body", async () => {
+    const body = { error: "Upgrading", code: 503, maintenance: { level: "read_only", until: 1900000000, retry_after: 90 } };
+    const c = makeClient(() => new Response(JSON.stringify(body), { status: 503, headers: { "content-type": "application/json" } }));
+    const err = await c.request("/api/v1/x").catch((e) => e) as VaultbaseError;
+    expect(err).toBeInstanceOf(VaultbaseError);
+    expect(err.data).toEqual({ kind: "maintenance", message: "Upgrading", level: "read_only", until: 1900000000, retryAfterMs: 90_000 });
+  });
+
+  it("falls back to Retry-After, and a 503 without the maintenance object stays a server error", async () => {
+    const m = makeClient(() => new Response(JSON.stringify({ error: "Down", code: 503, maintenance: { level: "full" } }), {
+      status: 503, headers: { "content-type": "application/json", "retry-after": "30" },
+    }));
+    expect(((await m.request("/api/v1/x").catch((e) => e)) as VaultbaseError).data).toEqual({ kind: "maintenance", message: "Down", level: "full", retryAfterMs: 30_000 });
+    const other = makeClient(() => new Response(JSON.stringify({ error: "Too many realtime connections", code: 503 }), {
+      status: 503, headers: { "content-type": "application/json" },
+    }));
+    expect(((await other.request("/api/v1/x").catch((e) => e)) as VaultbaseError).kind).toBe("server");
+  });
+
   it("attaches Authorization header when the auth store has a token", async () => {
     let captured = "";
     const c = new HttpClient({

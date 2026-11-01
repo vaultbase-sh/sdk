@@ -302,6 +302,7 @@ try {
     case "network":             toast("offline"); break;
     case "conflict":            reload(); break;
     case "precondition_failed": reloadAndMerge(e.data.currentEtag); break;
+    case "maintenance":         showDownPage(e.data.message, e.data.until); break;
     case "server":              report(e.data.status); break;
     case "aborted":             /* intentional, ignore */ break;
   }

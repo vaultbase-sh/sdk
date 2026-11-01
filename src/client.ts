@@ -230,6 +230,15 @@ export class HttpClient {
       const etag = res.headers.get("etag") ?? undefined;
       throw VaultbaseError.preconditionFailed(extractMessage(data) ?? "Precondition Failed", etag);
     }
+    if (res.status === 503) {
+      const m = maintenanceInfo(data);
+      if (m) {
+        // The body carries the retry hint: Retry-After isn't readable cross-origin.
+        const seconds = m.retry_after ?? parseFloat(res.headers.get("retry-after") ?? "");
+        const retryAfterMs = Number.isFinite(seconds) ? seconds * 1000 : undefined;
+        throw VaultbaseError.maintenance(extractMessage(data) ?? "Down for maintenance", m.level === "read_only" ? "read_only" : "full", m.until, retryAfterMs);
+      }
+    }
     if (!res.ok) throw VaultbaseError.server(res.status, extractMessage(data) ?? `HTTP ${res.status}`, data);
 
     // Server uses a `{ data: T }` envelope for single-result endpoints. List
@@ -262,6 +271,19 @@ function extractMessage(body: unknown): string | null {
     if (typeof e === "string") return e;
   }
   return null;
+}
+
+/** The `maintenance` object of a maintenance-mode 503, or null for any other body. */
+function maintenanceInfo(body: unknown): { level?: string; until?: number; retry_after?: number } | null {
+  if (!body || typeof body !== "object") return null;
+  const m = (body as { maintenance?: unknown }).maintenance;
+  if (!m || typeof m !== "object") return null;
+  const o = m as Record<string, unknown>;
+  return {
+    ...(typeof o["level"] === "string" ? { level: o["level"] } : {}),
+    ...(typeof o["until"] === "number" ? { until: o["until"] } : {}),
+    ...(typeof o["retry_after"] === "number" ? { retry_after: o["retry_after"] } : {}),
+  };
 }
 
 function mergeSignals(a?: AbortSignal, b?: AbortSignal): AbortSignal {

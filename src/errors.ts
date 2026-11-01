@@ -11,6 +11,7 @@ export type ErrorKind =
   | "conflict"
   | "precondition_failed"
   | "server"
+  | "maintenance"
   | "aborted";
 
 export interface NetworkErrorData    { kind: "network"; message: string; cause?: unknown }
@@ -20,6 +21,18 @@ export interface RateLimitErrorData  { kind: "rate_limit"; message: string; retr
 export interface ConflictErrorData   { kind: "conflict"; message: string; serverCode: 409 | 422 }
 export interface ServerErrorData     { kind: "server"; message: string; status: number; body?: unknown }
 export interface AbortedErrorData    { kind: "aborted"; message: string }
+/**
+ * 503 from a server in maintenance mode. `level` is `read_only` when reads
+ * still work; `until` (Unix seconds) and `retryAfterMs` are set when the
+ * admin said when it should be back.
+ */
+export interface MaintenanceErrorData {
+  kind: "maintenance";
+  message: string;
+  level: "full" | "read_only";
+  until?: number;
+  retryAfterMs?: number;
+}
 /** 412 Precondition Failed — `If-Match` ETag did not match the server's record. */
 export interface PreconditionFailedErrorData {
   kind: "precondition_failed";
@@ -36,6 +49,7 @@ export type VaultbaseErrorData =
   | ConflictErrorData
   | PreconditionFailedErrorData
   | ServerErrorData
+  | MaintenanceErrorData
   | AbortedErrorData;
 
 export class VaultbaseError extends Error {
@@ -67,6 +81,12 @@ export class VaultbaseError extends Error {
   }
   static server(status: number, message: string, body?: unknown): VaultbaseError {
     return new VaultbaseError({ kind: "server", message, status, ...(body !== undefined ? { body } : {}) });
+  }
+  static maintenance(message: string, level: MaintenanceErrorData["level"], until?: number, retryAfterMs?: number): VaultbaseError {
+    const data: MaintenanceErrorData = { kind: "maintenance", message, level };
+    if (until !== undefined) data.until = until;
+    if (retryAfterMs !== undefined) data.retryAfterMs = retryAfterMs;
+    return new VaultbaseError(data);
   }
   static aborted(message = "Request aborted"): VaultbaseError {
     return new VaultbaseError({ kind: "aborted", message });
