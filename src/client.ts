@@ -75,9 +75,16 @@ const REFRESH_LEAD_SECONDS = 60;
  * objects don't share state. SDK consumers can clear via `vb.client.etags.clear()`.
  */
 export class EtagCache {
+  /** Most recent last; the oldest go past this many (a long-running process reads many records). */
+  static readonly MAX = 1000;
   private readonly map = new Map<string, string>();
   get(collection: string, id: string): string | undefined { return this.map.get(`${collection}:${id}`); }
-  set(collection: string, id: string, etag: string): void { this.map.set(`${collection}:${id}`, etag); }
+  set(collection: string, id: string, etag: string): void {
+    const key = `${collection}:${id}`;
+    this.map.delete(key);
+    this.map.set(key, etag);
+    if (this.map.size > EtagCache.MAX) this.map.delete(this.map.keys().next().value!);
+  }
   delete(collection: string, id: string): void { this.map.delete(`${collection}:${id}`); }
   clear(): void { this.map.clear(); }
 }
@@ -121,11 +128,15 @@ export class HttpClient {
     // Cancellation wiring
     let signal: AbortSignal | undefined = options.signal;
     let cancelKey: string | null = null;
+    let cancelSignal: AbortSignal | undefined;
+    let unmerge = (): void => {};
     if (options.requestKey !== null) {
       cancelKey = options.requestKey ?? (this.defaultAutoCancel ? `${method}:${path}` : null);
       if (cancelKey) {
-        const cancelSignal = this.cancel.acquire(cancelKey);
-        signal = mergeSignals(signal, cancelSignal);
+        cancelSignal = this.cancel.acquire(cancelKey);
+        const merged = mergeSignals(signal, cancelSignal);
+        signal = merged.signal;
+        unmerge = merged.dispose;
       }
     }
 
@@ -135,24 +146,35 @@ export class HttpClient {
       if (options.body instanceof FormData) delete headers["Content-Type"];
     }
 
-    let res: Response;
+    // The key is held until the body is read, so a newer request with the
+    // same key still cancels this one while its body is arriving.
     try {
-      const init: RequestInit = { method, headers, ...(body !== undefined ? { body } : {}) };
-      if (signal) init.signal = signal;
-      if (this.withCredentials) init.credentials = "include";
-      res = await this.fetcher(url, init);
-    } catch (e) {
-      if (signal?.aborted) { // the caller's signal, or a newer request with the same requestKey
-        throw VaultbaseError.aborted();
+      let res: Response;
+      try {
+        const init: RequestInit = { method, headers, ...(body !== undefined ? { body } : {}) };
+        if (signal) init.signal = signal;
+        if (this.withCredentials) init.credentials = "include";
+        res = await this.fetcher(url, init);
+      } catch (e) {
+        if (signal?.aborted) { // the caller's signal, or a newer request with the same requestKey
+          throw VaultbaseError.aborted();
+        }
+        throw VaultbaseError.network(e instanceof Error ? e.message : String(e), e);
       }
-      throw VaultbaseError.network(e instanceof Error ? e.message : String(e), e);
+      // Only a success's ETag: a 412 carries the current one, and caching it
+      // would let a blind retry of the same update overwrite the other write.
+      if (res.ok) this.captureEtag(path, res);
+      options.onResponse?.(res);
+      const out = await this.handleResponse<T>(res, path, { ...options, ...(signal ? { signal } : {}) });
+      if (signal?.aborted) throw VaultbaseError.aborted();
+      return out;
+    } catch (e) {
+      if (signal?.aborted && !(e instanceof VaultbaseError && e.kind === "aborted")) throw VaultbaseError.aborted();
+      throw e;
     } finally {
-      if (cancelKey && signal) this.cancel.release(cancelKey, signal);
+      unmerge();
+      if (cancelKey && cancelSignal) this.cancel.release(cancelKey, cancelSignal);
     }
-
-    this.captureEtag(path, res);
-    options.onResponse?.(res);
-    return await this.handleResponse<T>(res, path, options);
   }
 
   /**
@@ -206,9 +228,12 @@ export class HttpClient {
       if (options.skipAuth) throw VaultbaseError.auth("invalid", extractMessage(data) ?? "Unauthorized");
       // Try a single refresh+retry for non-auth-flow paths.
       if (!options.skipAuth && !options.retried && !path.endsWith("/api/v1/auth/refresh")) {
-        const ok = await this.refresher.refreshOnce().catch(() => false);
+        // A refresh that couldn't be answered (offline, 5xx) rejects: that
+        // error is this request's, and the session stays.
+        const ok = await this.refresher.refreshOnce();
         if (ok) {
-          return await this.request<T>(path, { ...options, skipAuth: false, retried: true });
+          // Under this request's key and signal, which it still holds.
+          return await this.request<T>(path, { ...options, skipAuth: false, retried: true, requestKey: null });
         }
       }
       // A token we just refreshed was refused too: this endpoint refuses the
@@ -286,12 +311,13 @@ function maintenanceInfo(body: unknown): { level?: string; until?: number; retry
   };
 }
 
-function mergeSignals(a?: AbortSignal, b?: AbortSignal): AbortSignal {
-  if (!a) return b!;
-  if (!b) return a;
+function mergeSignals(a: AbortSignal | undefined, b: AbortSignal): { signal: AbortSignal; dispose: () => void } {
+  if (!a) return { signal: b, dispose: () => {} };
   const ctrl = new AbortController();
   const onAbort = () => ctrl.abort();
-  if (a.aborted || b.aborted) ctrl.abort();
-  else { a.addEventListener("abort", onAbort); b.addEventListener("abort", onAbort); }
-  return ctrl.signal;
+  if (a.aborted || b.aborted) { ctrl.abort(); return { signal: ctrl.signal, dispose: () => {} }; }
+  a.addEventListener("abort", onAbort);
+  b.addEventListener("abort", onAbort);
+  // A caller's long-lived signal would otherwise collect a listener per request.
+  return { signal: ctrl.signal, dispose: () => { a.removeEventListener("abort", onAbort); b.removeEventListener("abort", onAbort); } };
 }

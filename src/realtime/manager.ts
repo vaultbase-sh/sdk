@@ -3,6 +3,8 @@ import type { AnyRecord, RealtimeEvent, SubscribeCallback, SubscribeFilter } fro
 
 const BACKOFF_MS = [250, 500, 1000, 2000, 5000, 10_000];
 const HEARTBEAT_MS = 30_000;
+/** A connection must stay up this long before the backoff starts over. */
+const STABLE_MS = 5_000;
 
 /** Internal subscription record. */
 interface Sub<R = AnyRecord> {
@@ -34,6 +36,14 @@ export class RealtimeManager {
   private heartbeat: ReturnType<typeof setInterval> | null = null;
   private lastToken: string | null = null;
   private stopAuthWatch: (() => void) | null = null;
+  /** Bumped by closeNow(): a socket from an older generation is stale. */
+  private generation = 0;
+  private retryTimer: ReturnType<typeof setTimeout> | null = null;
+  private stableTimer: ReturnType<typeof setTimeout> | null = null;
+  /** The server refused this origin: retrying can't help until the page reloads. */
+  private refused = false;
+  /** SSE subscription POSTs, one at a time; each sends the topics held then. */
+  private ssePosting: Promise<void> = Promise.resolve();
 
   constructor(private readonly client: HttpClient) {}
 
@@ -69,13 +79,15 @@ export class RealtimeManager {
     this.subs.push(sub);
     this.closed = false;
     this.watchAuth();
-    const topics = topicsFor(sub);
-    for (const t of topics) {
-      this.topicRefs.set(t, (this.topicRefs.get(t) ?? 0) + 1);
+    // Only topics nobody held yet: a (re)connect sends the whole list itself.
+    const added: string[] = [];
+    for (const t of topicsFor(sub)) {
+      const n = this.topicRefs.get(t) ?? 0;
+      if (n === 0) added.push(t);
+      this.topicRefs.set(t, n + 1);
     }
-    void this.ensureConnected().then(() => {
-      this.transport?.send({ type: "subscribe", topics: this.uniqueTopics() });
-    });
+    if (this.transport) { if (added.length > 0) this.transport.send({ type: "subscribe", topics: added }); }
+    else void this.ensureConnected();
     return () => this.unsubscribe(sub);
   }
 
@@ -98,6 +110,9 @@ export class RealtimeManager {
   /** Drop everything. Used on logout / unmount. */
   closeNow(): void {
     this.closed = true;
+    this.generation++;
+    if (this.retryTimer) { clearTimeout(this.retryTimer); this.retryTimer = null; }
+    if (this.stableTimer) { clearTimeout(this.stableTimer); this.stableTimer = null; }
     this.subs = [];
     this.topicRefs.clear();
     this.stopAuthWatch?.();
@@ -112,26 +127,41 @@ export class RealtimeManager {
   }
 
   private async ensureConnected(): Promise<void> {
-    if (this.transport || this.connecting || this.closed) return;
+    if (this.transport || this.connecting || this.closed || this.refused) return;
     this.connecting = true;
+    const gen = this.generation;
     try {
-      const t = await this.connectWs().catch(() => this.connectSse());
-      this.transport = t;
-      this.attempt = 0;
+      const t = await this.connectWs(gen).catch(() => this.connectSse(gen));
       this.connecting = false;
+      // Closed (an unsubscribe, a logout) while it opened: don't keep it.
+      if (gen !== this.generation) { t.close(); return; }
+      this.transport = t;
+      // A server that accepts and then closes at once (a refused origin, the
+      // connection cap, maintenance) must not reset the backoff.
+      if (this.stableTimer) clearTimeout(this.stableTimer);
+      this.stableTimer = setTimeout(() => { this.stableTimer = null; this.attempt = 0; }, STABLE_MS);
     } catch {
       this.connecting = false;
-      this.scheduleReconnect();
+      if (gen === this.generation) this.scheduleReconnect();
     }
   }
 
+  /** The current transport went away: forget it and try again later. */
+  private dropped(t: Transport | null): void {
+    if (t && this.transport !== t) return; // an older socket's late event
+    this.transport = null;
+    if (this.heartbeat) { clearInterval(this.heartbeat); this.heartbeat = null; }
+    if (this.stableTimer) { clearTimeout(this.stableTimer); this.stableTimer = null; }
+    if (!this.closed) this.scheduleReconnect();
+  }
+
   private scheduleReconnect(): void {
-    if (this.closed) return;
+    if (this.closed || this.refused || this.retryTimer) return;
     const idx = Math.min(this.attempt, BACKOFF_MS.length - 1);
     const base = BACKOFF_MS[idx]!;
     const jitter = base * (0.8 + Math.random() * 0.4);
     this.attempt++;
-    setTimeout(() => { void this.ensureConnected(); }, jitter);
+    this.retryTimer = setTimeout(() => { this.retryTimer = null; void this.ensureConnected(); }, jitter);
   }
 
   /**
@@ -151,13 +181,14 @@ export class RealtimeManager {
   }
 
   // ── WebSocket path ──────────────────────────────────────────────────────
-  private async connectWs(): Promise<Transport> {
+  private async connectWs(gen: number): Promise<Transport> {
     if (typeof globalThis.WebSocket === "undefined") throw new Error("no websocket");
     const wsUrl = this.client.baseUrl.replace(/^http/, "ws") + "/realtime";
     const ws = new globalThis.WebSocket(wsUrl);
     // Until it opens, a failure is ensureConnected's to handle (it falls back
     // to SSE or schedules the retry); after, a drop reconnects from here.
     let opened = false;
+    let transport: Transport | null = null;
     return await new Promise<Transport>((resolve, reject) => {
       const timer = setTimeout(() => {
         try { ws.close(); } catch { /* noop */ }
@@ -166,6 +197,7 @@ export class RealtimeManager {
       ws.addEventListener("open", () => {
         clearTimeout(timer);
         opened = true;
+        if (gen !== this.generation) { try { ws.close(); } catch { /* noop */ } reject(new Error("closed")); return; }
         const stored = this.client.authStore.get();
         if (stored?.token) {
           ws.send(JSON.stringify({ type: "auth", token: stored.token }));
@@ -173,7 +205,7 @@ export class RealtimeManager {
         const topics = this.uniqueTopics();
         if (topics.length > 0) ws.send(JSON.stringify({ type: "subscribe", topics }));
         this.startHeartbeat(() => ws.send(JSON.stringify({ type: "ping" })));
-        const transport: Transport = {
+        transport = {
           send: (msg) => ws.send(JSON.stringify(msg)),
           // A null token can't be "sent"; the server keeps the old identity
           // until it expires, then sends auth_expired. Reconnect to drop it now.
@@ -190,15 +222,18 @@ export class RealtimeManager {
           const data = JSON.parse(typeof e.data === "string" ? e.data : "");
           if (data?.type === "connected") return;
           if (data?.type === "auth_expired") { this.onAuthExpired(); return; }
+          if (data?.type === "error" && data?.reason === "origin_not_allowed") {
+            this.refused = true;
+            console.warn("[vaultbase] realtime: this origin isn't in the server's allowed origins; not reconnecting");
+            return;
+          }
           if (data?.collection && data?.type) this.deliver(data as RealtimeEvent);
         } catch { /* drop malformed */ }
       });
       ws.addEventListener("close", () => {
         clearTimeout(timer);
         if (!opened) { reject(new Error("ws closed")); return; }
-        this.transport = null;
-        if (this.heartbeat) { clearInterval(this.heartbeat); this.heartbeat = null; }
-        if (!this.closed) this.scheduleReconnect();
+        if (gen === this.generation) this.dropped(transport);
       });
       ws.addEventListener("error", () => {
         clearTimeout(timer);
@@ -208,30 +243,37 @@ export class RealtimeManager {
   }
 
   // ── SSE fallback ────────────────────────────────────────────────────────
-  private async connectSse(): Promise<Transport> {
+  private async connectSse(gen: number): Promise<Transport> {
     if (typeof globalThis.EventSource === "undefined") throw new Error("no eventsource");
     // SSE adapter: open the stream, capture clientId from first frame, then
     // POST subscriptions. Topic mutations re-POST to /api/v1/realtime.
     const url = this.client.baseUrl + "/api/v1/realtime";
     const es = new globalThis.EventSource(url, { withCredentials: true });
     let opened = false; // as in connectWs
+    let transport: Transport | null = null;
     return await new Promise<Transport>((resolve, reject) => {
       const timer = setTimeout(() => { try { es.close(); } catch { /* noop */ } reject(new Error("sse timeout")); }, 5000);
       es.addEventListener("connect", (ev: MessageEvent) => {
         clearTimeout(timer);
         opened = true;
+        if (gen !== this.generation) { try { es.close(); } catch { /* noop */ } reject(new Error("closed")); return; }
         try {
           const parsed = JSON.parse(ev.data) as { clientId?: string };
           if (parsed.clientId) this.clientId = parsed.clientId;
         } catch { /* noop */ }
-        void this.sseSubscribe(this.uniqueTopics());
-        const transport: Transport = {
-          send: (msg) => {
-            if (msg.type === "subscribe") void this.sseSubscribe(this.uniqueTopics());
-            else if (msg.type === "unsubscribe") void this.sseSubscribe(this.uniqueTopics());
+        this.sseSubscribe();
+        transport = {
+          // The server replaces the stream's whole topic list, so every
+          // change posts the current one.
+          send: () => this.sseSubscribe(),
+          // The control POST carries the token, so re-posting re-authenticates.
+          // Without a token it would keep the old identity: reopen the stream.
+          auth: (token) => {
+            if (token) { this.sseSubscribe(); return; }
+            const t = transport;
+            t?.close();
+            this.dropped(t);
           },
-          // The SSE control POST carries the token; re-posting re-authenticates.
-          auth: () => { void this.sseSubscribe(this.uniqueTopics()).catch(() => {}); },
           close: () => {
             try { es.close(); } catch { /* noop */ }
             if (this.clientId) {
@@ -253,24 +295,31 @@ export class RealtimeManager {
         es.close();
         if (!opened) { reject(new Error("sse error")); return; }
         // The stream dropped: forget it, so the reconnect opens a new one.
-        this.transport = null;
         this.clientId = null;
-        if (!this.closed) this.scheduleReconnect();
+        if (gen === this.generation) this.dropped(transport);
       });
     });
   }
 
-  private async sseSubscribe(topics: string[]): Promise<void> {
-    if (!this.clientId) return;
-    const stored = this.client.authStore.get();
-    await this.client.request("/api/v1/realtime", {
-      method: "POST",
-      body: {
-        clientId: this.clientId,
-        topics,
-        ...(stored?.token ? { token: stored.token } : {}),
-      },
-    });
+  /**
+   * Post the current topics. Queued behind any POST in flight, and reading
+   * the topics when its turn comes: two racing POSTs could land in the wrong
+   * order, and the last one replaces the list.
+   */
+  private sseSubscribe(): void {
+    this.ssePosting = this.ssePosting.then(async () => {
+      if (!this.clientId) return;
+      const stored = this.client.authStore.get();
+      await this.client.request("/api/v1/realtime", {
+        method: "POST",
+        requestKey: null,
+        body: {
+          clientId: this.clientId,
+          topics: this.uniqueTopics(),
+          ...(stored?.token ? { token: stored.token } : {}),
+        },
+      });
+    }).catch(() => { /* the next change or reconnect posts again */ });
   }
 
   private startHeartbeat(send: () => void): void {

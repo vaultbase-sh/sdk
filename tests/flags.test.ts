@@ -50,3 +50,33 @@ describe("FlagsClient", () => {
     expect(bodies[0]).toEqual({ context: { user: { plan: "pro" } } });
   });
 });
+
+describe("FlagsClient lifecycle", () => {
+  it("connect() twice opens one socket", async () => {
+    const g = globalThis as unknown as { WebSocket?: unknown };
+    const saved = g.WebSocket;
+    let opened = 0;
+    g.WebSocket = class { constructor() { opened++; } addEventListener() {} send() {} close() {} };
+    try {
+      const { flags } = makeFlags([{}]);
+      await flags.connect();
+      await flags.connect();
+      expect(opened).toBe(1);
+      flags.disconnect();
+    } finally { g.WebSocket = saved; }
+  });
+
+  it("a slow older response doesn't overwrite a newer context's flags", async () => {
+    let n = 0;
+    const fetcher = (async () => {
+      const mine = ++n;
+      await Bun.sleep(mine === 1 ? 30 : 0);
+      return new Response(JSON.stringify({ data: { plan: mine === 1 ? "old" : "new" } }), { headers: { "content-type": "application/json" } });
+    }) as unknown as typeof fetch;
+    const flags = new FlagsClient(new HttpClient({ baseUrl: "http://localhost", authStore: new MemoryAuthStore(), fetch: fetcher }));
+    const first = flags.refresh();
+    await flags.setContext({ user: { plan: "pro" } });
+    await first;
+    expect(flags.getString("plan", "")).toBe("new");
+  });
+});

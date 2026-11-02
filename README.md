@@ -104,7 +104,7 @@ const filter = vb.q`title ~ ${term} && status = ${"published"} && deleted = ${fa
 | `boolean` | `true` / `false` |
 | `null` | `null` |
 | `Date` | quoted ISO-8601 string |
-| `Array<…>` | `(v1, v2, …)` for use with `?=` / `?~` array-prefix ops |
+| `Array<…>` | **throws** — the filter language has no list value; join comparisons with `\|\|` |
 | `field("name")` | bare identifier (validated against the same regex the server uses) |
 | `undefined` | **throws** — use `null` |
 | anything else | **throws** |

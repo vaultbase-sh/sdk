@@ -311,3 +311,78 @@ describe("Files.token cache", () => {
     expect(minted()).toBe(3);
   });
 });
+
+describe("token refresh failures", () => {
+  const jwt = (exp: number) => `aaa.${btoa(JSON.stringify({ exp, id: "u1" })).replace(/=/g, "")}.bbb`;
+
+  it("an expiring token whose refresh fails offline keeps the session", async () => {
+    const c = makeClient((req) => {
+      if (req.url.endsWith("/api/v1/auth/refresh")) throw new TypeError("fetch failed");
+      return new Response(JSON.stringify({ data: { ok: true } }), { headers: { "content-type": "application/json" } });
+    });
+    const token = jwt(Math.floor(Date.now() / 1000) + 10);
+    c.authStore.set({ token });
+    await c.request("/api/v1/posts");
+    expect(c.authStore.get()?.token).toBe(token);
+  });
+
+  it("a 401 whose refresh gets a 503 keeps the session and reports the 503", async () => {
+    const c = makeClient((req) => {
+      if (req.url.endsWith("/api/v1/auth/refresh")) return new Response(JSON.stringify({ error: "down" }), { status: 503, headers: { "content-type": "application/json" } });
+      return new Response(JSON.stringify({ error: "expired" }), { status: 401, headers: { "content-type": "application/json" } });
+    });
+    const token = jwt(Math.floor(Date.now() / 1000) + 3600);
+    c.authStore.set({ token });
+    const err = await c.request("/api/v1/posts").catch((e) => e);
+    expect(err).toBeInstanceOf(VaultbaseError);
+    expect((err as VaultbaseError).kind).not.toBe("auth");
+    expect(c.authStore.get()?.token).toBe(token);
+  });
+
+  it("a refresh the server refuses ends the session (legitimate path)", async () => {
+    const c = makeClient(() => new Response(JSON.stringify({ error: "nope" }), { status: 401, headers: { "content-type": "application/json" } }));
+    c.authStore.set({ token: jwt(Math.floor(Date.now() / 1000) + 3600) });
+    const err = await c.request("/api/v1/posts").catch((e) => e);
+    expect((err as VaultbaseError).kind).toBe("auth");
+    expect(c.authStore.get()).toBeNull();
+  });
+});
+
+describe("requestKey and ETags", () => {
+  it("a newer request with the same key cancels one whose body is still arriving", async () => {
+    let n = 0;
+    const c = makeClient(() => {
+      const mine = ++n;
+      const body = new ReadableStream({
+        start(ctrl) {
+          setTimeout(() => { ctrl.enqueue(new TextEncoder().encode(JSON.stringify({ data: { n: mine } }))); ctrl.close(); }, mine === 1 ? 40 : 0);
+        },
+      });
+      return new Response(body, { headers: { "content-type": "application/json" } });
+    });
+    const first = c.request<{ n: number }>("/api/v1/posts", { requestKey: "search" }).catch((e) => e);
+    await Bun.sleep(5);
+    const second = await c.request<{ n: number }>("/api/v1/posts", { requestKey: "search" });
+    expect(second.n).toBe(2);
+    const err = await first;
+    expect((err as VaultbaseError).kind).toBe("aborted");
+  });
+
+  it("a caller's signal doesn't collect a listener per request", async () => {
+    const c = makeClient(() => new Response(JSON.stringify({ data: {} }), { headers: { "content-type": "application/json" } }));
+    const ctrl = new AbortController();
+    let added = 0, removed = 0;
+    const add = ctrl.signal.addEventListener.bind(ctrl.signal);
+    const rem = ctrl.signal.removeEventListener.bind(ctrl.signal);
+    ctrl.signal.addEventListener = ((...a: Parameters<typeof add>) => { added++; add(...a); }) as typeof add;
+    ctrl.signal.removeEventListener = ((...a: Parameters<typeof rem>) => { removed++; rem(...a); }) as typeof rem;
+    for (let i = 0; i < 5; i++) await c.request("/api/v1/posts", { requestKey: `k${i}`, signal: ctrl.signal });
+    expect(added).toBe(removed);
+  });
+
+  it("a 412's ETag isn't cached", async () => {
+    const c = makeClient(() => new Response(JSON.stringify({ error: "changed" }), { status: 412, headers: { "content-type": "application/json", etag: `W/"9"` } }));
+    await c.request("/api/v1/posts/p1", { method: "PATCH", body: {} }).catch(() => {});
+    expect(c.etags.get("posts", "p1")).toBeUndefined();
+  });
+});

@@ -55,12 +55,14 @@ function encodeValue(v: unknown): string {
   if (typeof v === "string") return escapeString(v);
   if (typeof v === "number") {
     if (!Number.isFinite(v)) throw new Error(`vb.q: non-finite number not allowed (${v})`);
-    return String(v);
+    // The server reads plain decimals only: 1e21 and 1e-7 are written out.
+    return Number.isInteger(v) && Math.abs(v) < 1e21 ? String(v) : v.toLocaleString("en-US", { useGrouping: false, maximumFractionDigits: 20 });
   }
   if (typeof v === "boolean") return v ? "true" : "false";
   if (typeof v === "bigint") return v.toString();
   if (v instanceof Date) return escapeString(v.toISOString());
-  if (Array.isArray(v)) return `(${v.map(encodeValue).join(", ")})`;
+  // The filter language has no list value: `("a", "b")` was refused by the server.
+  if (Array.isArray(v)) throw new Error("vb.q: arrays can't be interpolated; join one comparison per value with ||");
   if (typeof v === "object" && v !== null && "__field" in v && typeof (v as FieldRef).__field === "string") {
     return (v as FieldRef).__field;
   }

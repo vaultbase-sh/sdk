@@ -1,4 +1,5 @@
 import type { HttpClient } from "../client.ts";
+import { VaultbaseError } from "../errors.ts";
 
 interface RefreshResponse { token: string }
 
@@ -19,8 +20,10 @@ export class RefreshCoordinator {
   constructor(private readonly client: HttpClient) {}
 
   /**
-   * Refresh the token. Returns true on success. Multiple concurrent callers
-   * collapse onto the same in-flight refresh.
+   * Refresh the token. Resolves true on success, false when the server
+   * refused the session (which then ends). Rejects when the refresh couldn't
+   * be answered (offline, rate limited, maintenance, a 5xx): the session is
+   * kept for a later try. Concurrent callers share one in-flight refresh.
    */
   refreshOnce(): Promise<boolean> {
     if (this.inFlight) return this.inFlight;
@@ -29,8 +32,10 @@ export class RefreshCoordinator {
   }
 
   private async doRefresh(): Promise<boolean> {
+    const before = this.client.authStore.get()?.token;
+    let data: RefreshResponse | null;
     try {
-      const data = await this.client.request<RefreshResponse>("/api/v1/auth/refresh", {
+      data = await this.client.request<RefreshResponse>("/api/v1/auth/refresh", {
         method: "POST",
         skipAuth: false,
         // Sends the current bearer but must not re-enter maybeRefresh(): that
@@ -38,16 +43,20 @@ export class RefreshCoordinator {
         skipRefresh: true,
         requestKey: null,
       });
-      if (!data?.token) {
-        this.client.authStore.set(null);
-        return false;
-      }
-      const prev = this.client.authStore.get();
-      this.client.authStore.set({ token: data.token, ...(prev?.record ? { record: prev.record } : {}) });
-      return true;
-    } catch {
+    } catch (e) {
+      // A refused session (401) was already cleared by the client. Anything
+      // else says nothing about the session: keep it.
+      if (e instanceof VaultbaseError && e.kind === "auth") return false;
+      throw e;
+    }
+    // Signed out or signed in again while this ran: leave that session alone.
+    if (this.client.authStore.get()?.token !== before) return false;
+    if (!data?.token) {
       this.client.authStore.set(null);
       return false;
     }
+    const prev = this.client.authStore.get();
+    this.client.authStore.set({ token: data.token, ...(prev?.record ? { record: prev.record } : {}) });
+    return true;
   }
 }

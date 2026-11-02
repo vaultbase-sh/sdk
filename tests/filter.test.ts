@@ -37,9 +37,15 @@ describe("q (tagged-template filter)", () => {
     expect(s(q`created > ${d}`)).toBe(`created > "2026-01-15T00:00:00.000Z"`);
   });
 
-  it("encodes arrays as comma-joined parens for ?= ops", () => {
-    expect(s(q`status ?= ${["draft", "published"]}`)).toBe(`status ?= ("draft", "published")`);
-    expect(s(q`id ?= ${[1, 2, 3]}`)).toBe(`id ?= (1, 2, 3)`);
+  it("refuses arrays: the server has no list value (it answered 400)", () => {
+    expect(() => q`status ?= ${["draft", "published"]}`).toThrow();
+  });
+
+  it("writes numbers the server can read, without exponents", () => {
+    expect(s(q`n > ${1e21}`)).toBe(`n > 1000000000000000000000`);
+    expect(s(q`n > ${1e-7}`)).toBe(`n > 0.0000001`);
+    expect(s(q`n > ${-2.5}`)).toBe(`n > -2.5`);
+    expect(s(q`n > ${42}`)).toBe(`n > 42`);
   });
 
   it("field() inserts a bare identifier", () => {

@@ -65,10 +65,11 @@ export function generateTypes(snapshot: SnapshotShape, opts: GenerateOptions = {
 
   const interfaces: string[] = [];
   const schemaEntries: string[] = [];
+  const usedNames = new Set<string>();
   for (const col of snapshot.collections) {
     if (!isValidIdent(col.name)) continue;
     const fields = parseFields(col.fields);
-    const baseName = pascal(col.name);
+    const baseName = typeBaseName(col.name, usedNames);
     const recordName = `${baseName}Record`;
     const createName = `${baseName}Create`;
     const updateName = `${baseName}Update`;
@@ -250,6 +251,20 @@ function groupType(f: SnapshotField, mode: "read" | "write"): string {
 
 function quoteKey(s: string): string {
   return /^[A-Za-z_][A-Za-z0-9_]*$/.test(s) ? s : JSON.stringify(s);
+}
+
+/**
+ * The type name prefix for a collection: PascalCase, valid (`_2fa` would be
+ * `2fa…`, and `_` would be `Record`, the global it shadows), and unique
+ * (`user_posts` and `userPosts` both make `UserPosts`).
+ */
+function typeBaseName(collection: string, used: Set<string>): string {
+  let base = pascal(collection);
+  if (!/^[A-Za-z]/.test(base)) base = `C${base}`;
+  let name = base;
+  for (let n = 2; used.has(name); n++) name = `${base}${n}`;
+  used.add(name);
+  return name;
 }
 
 function pascal(s: string): string {

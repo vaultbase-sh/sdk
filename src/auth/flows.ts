@@ -348,7 +348,8 @@ export class SharedAuth {
   }
 
   async logout(): Promise<void> {
-    try { await this.client.request("/api/v1/auth/logout", { method: "POST" }); }
+    // No refresh first: a token about to be revoked doesn't need renewing.
+    try { await this.client.request("/api/v1/auth/logout", { method: "POST", skipRefresh: true, requestKey: null }); }
     finally { this.client.authStore.set(null); }
   }
 

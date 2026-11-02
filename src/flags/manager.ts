@@ -36,6 +36,10 @@ export class FlagsClient {
   private connected = false;
   private closed = false;
   private reconnectAttempt = 0;
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Bumped per refresh: an older response that lands late is dropped. */
+  private seq = 0;
+  private stopAuthWatch: (() => void) | null = null;
 
   constructor(private readonly client: HttpClient) {}
 
@@ -43,8 +47,10 @@ export class FlagsClient {
   async connect(opts: FlagsConnectOptions = {}): Promise<void> {
     this.closed = false;
     if (opts.context) this.context = opts.context;
+    this.watchAuth();
     await this.refresh();
-    if (!opts.pollOnly) this.openWs();
+    // Once: StrictMode and remounts call connect() again.
+    if (!opts.pollOnly && !this.ws && !this.reconnectTimer) this.openWs();
     const interval = Math.max(10_000, opts.pollIntervalMs ?? 60_000);
     if (!this.pollTimer) {
       this.pollTimer = setInterval(() => { void this.refresh(); }, interval);
@@ -60,6 +66,7 @@ export class FlagsClient {
 
   /** Force a refetch of the bulk evaluation. */
   async refresh(): Promise<void> {
+    const seq = ++this.seq;
     try {
       // The server answers `{ data: { key: value } }`; HttpClient.request
       // unwraps that envelope, so `res` is the flag map itself.
@@ -68,12 +75,26 @@ export class FlagsClient {
         // With the session, so rules on `auth.*` see the signed-in user.
         { method: "POST", body: { context: this.context } },
       );
+      // A setContext() or sign-in since this started: its own refresh wins.
+      if (seq !== this.seq) return;
       const next = res && typeof res === "object" ? res : {};
       const changed = diffKeys(this.cache, next);
       this.cache.clear();
       for (const [k, v] of Object.entries(next)) this.cache.set(k, v);
       if (changed.length > 0) this.emit(changed);
     } catch { /* offline / boot — keep last-known cache */ }
+  }
+
+  /** Flags can target the signed-in user: re-evaluate when the session changes. */
+  private watchAuth(): void {
+    if (this.stopAuthWatch || !this.client.authStore.onChange) return;
+    let token = this.client.authStore.get()?.token ?? null;
+    this.stopAuthWatch = this.client.authStore.onChange(() => {
+      const next = this.client.authStore.get()?.token ?? null;
+      if (next === token) return;
+      token = next;
+      if (!this.closed) void this.refresh();
+    });
   }
 
   // ── Sync accessors ──────────────────────────────────────────────────────
@@ -139,11 +160,12 @@ export class FlagsClient {
       } catch { /* drop */ }
     });
     ws.addEventListener("close", () => {
+      if (this.ws !== ws) return; // replaced or disconnected
       this.ws = null;
       if (this.closed) return;
       const delay = Math.min(30_000, 500 * 2 ** this.reconnectAttempt) * (0.8 + Math.random() * 0.4);
       this.reconnectAttempt++;
-      setTimeout(() => { if (!this.closed) this.openWs(); }, delay);
+      this.reconnectTimer = setTimeout(() => { this.reconnectTimer = null; if (!this.closed) this.openWs(); }, delay);
     });
     ws.addEventListener("error", () => {
       try { ws.close(); } catch { /* noop */ }
@@ -155,7 +177,12 @@ export class FlagsClient {
     this.closed = true;
     this.connected = false;
     if (this.pollTimer) { clearInterval(this.pollTimer); this.pollTimer = null; }
-    if (this.ws) { try { this.ws.close(); } catch { /* noop */ } this.ws = null; }
+    if (this.reconnectTimer) { clearTimeout(this.reconnectTimer); this.reconnectTimer = null; }
+    this.stopAuthWatch?.();
+    this.stopAuthWatch = null;
+    const ws = this.ws;
+    this.ws = null;
+    if (ws) { try { ws.close(); } catch { /* noop */ } }
   }
 }
 

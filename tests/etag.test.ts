@@ -161,3 +161,13 @@ describe("Collection auto-attaches If-Match", () => {
     }
   });
 });
+
+describe("EtagCache size", () => {
+  it("keeps the most recent entries only", async () => {
+    const { EtagCache } = await import("../src/client.ts");
+    const c = new EtagCache();
+    for (let i = 0; i <= EtagCache.MAX; i++) c.set("posts", `p${i}`, `W/"${i}"`);
+    expect(c.get("posts", "p0")).toBeUndefined();
+    expect(c.get("posts", `p${EtagCache.MAX}`)).toBe(`W/"${EtagCache.MAX}"`);
+  });
+});

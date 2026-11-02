@@ -180,3 +180,21 @@ describe("generateTypes", () => {
     expect(create).toContain("address?: { city: string; zip?: string | null } | null;");
   });
 });
+
+describe("generateTypes: type names", () => {
+  const col = (name: string) => ({ name, type: "base" as const, fields: JSON.stringify([{ name: "title", type: "text" }]) });
+
+  it("a collection name starting with _ and a digit still makes a valid name", () => {
+    const out = generateTypes({ collections: [col("_2fa"), col("_")] });
+    expect(out).toContain("export interface C2faRecord");
+    expect(out).not.toMatch(/export interface Record\b/);
+    expect(out).not.toMatch(/interface \d/);
+  });
+
+  it("two names with the same PascalCase get distinct types", () => {
+    const out = generateTypes({ collections: [col("user_posts"), col("userPosts")] });
+    expect(out).toContain("export interface UserPostsRecord");
+    expect(out).toContain("export interface UserPosts2Record");
+    expect(out.match(/export type UserPostsUpdate\b/g)?.length).toBe(1);
+  });
+});
