@@ -98,7 +98,8 @@ export class HttpClient {
   readonly etags = new EtagCache();
   private readonly fetcher: typeof fetch;
   private readonly defaultAutoCancel: boolean;
-  private readonly withCredentials: boolean;
+  /** Whether requests send cookies (`credentials: "include"`). */
+  readonly withCredentials: boolean;
   private readonly authTransport: "header" | "cookie-only";
 
   constructor(opts: ClientOptions) {
@@ -206,7 +207,8 @@ export class HttpClient {
     return url.toString();
   }
 
-  private async handleResponse<T>(res: Response, path: string, options: RequestOptions): Promise<T> {
+  /** @internal A response to the client's result or error; also used by the XHR upload path. */
+  async handleResponse<T>(res: Response, path: string, options: RequestOptions): Promise<T> {
     if (res.status === 429) {
       const retryAfter = parseFloat(res.headers.get("retry-after") ?? "1");
       const retryAfterMs = Math.min(Number.isFinite(retryAfter) ? retryAfter * 1000 : 1000, 10_000);

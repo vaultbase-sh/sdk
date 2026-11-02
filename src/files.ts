@@ -143,11 +143,16 @@ export class Files {
   }
 
   // ── XHR upload path (progress events) ───────────────────────────────────
-  private uploadXhr(path: string, body: FormData, opts: UploadOptions): Promise<unknown> {
-    return new Promise((resolve, reject) => {
+  // Same refresh, credentials and error handling as every other request: it
+  // used to skip the refresh, sign nobody out on a 401, always send cookies,
+  // and drop the server's message.
+  private async uploadXhr(path: string, body: FormData, opts: UploadOptions): Promise<unknown> {
+    if (opts.signal?.aborted) throw VaultbaseError.aborted();
+    await this.client.maybeRefresh();
+    const res = await new Promise<Response>((resolve, reject) => {
       const xhr = new XMLHttpRequest();
       xhr.open("POST", this.client.buildUrl(path));
-      xhr.withCredentials = true;
+      xhr.withCredentials = this.client.withCredentials;
       const stored = this.client.authStore.get();
       if (stored?.token) xhr.setRequestHeader("Authorization", `Bearer ${stored.token}`);
       if (opts.onProgress) {
@@ -155,30 +160,20 @@ export class Files {
           opts.onProgress?.({ loaded: e.loaded, total: e.total || 0 });
         };
       }
-      if (opts.signal) {
-        const onAbort = () => xhr.abort();
-        opts.signal.addEventListener("abort", onAbort);
-      }
-      xhr.onerror = () => reject(VaultbaseError.network("Upload failed"));
-      xhr.onabort = () => reject(VaultbaseError.aborted());
+      const onAbort = () => xhr.abort();
+      opts.signal?.addEventListener("abort", onAbort);
+      const done = () => opts.signal?.removeEventListener("abort", onAbort);
+      xhr.onerror = () => { done(); reject(VaultbaseError.network("Upload failed")); };
+      xhr.onabort = () => { done(); reject(VaultbaseError.aborted()); };
       xhr.onload = () => {
-        if (xhr.status >= 200 && xhr.status < 300) {
-          let parsed: unknown;
-          try { parsed = JSON.parse(xhr.responseText); } catch { parsed = null; }
-          const data = (parsed as { data?: unknown } | null)?.data ?? parsed;
-          resolve(data);
-        } else if (xhr.status === 401 || xhr.status === 403) {
-          reject(VaultbaseError.auth(xhr.status === 401 ? "expired" : "forbidden"));
-        } else if (xhr.status === 422) {
-          let parsed: { details?: Record<string, string>; error?: string } | null = null;
-          try { parsed = JSON.parse(xhr.responseText); } catch { /* noop */ }
-          reject(VaultbaseError.validation(parsed?.error ?? "Validation failed", parsed?.details ?? {}));
-        } else {
-          reject(VaultbaseError.server(xhr.status, `HTTP ${xhr.status}`));
-        }
+        done();
+        const type = xhr.getResponseHeader("content-type");
+        resolve(new Response(xhr.responseText, { status: xhr.status, headers: type ? { "content-type": type } : {} }));
       };
       xhr.send(body);
     });
+    // A 401 refreshes once and retries over fetch (without progress events).
+    return await this.client.handleResponse(res, path, { method: "POST", body, ...(opts.signal ? { signal: opts.signal } : {}) });
   }
 }
 
