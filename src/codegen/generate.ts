@@ -29,6 +29,16 @@ export interface SnapshotCollection {
   type: "base" | "auth" | "view" | "singleton";
   fields: string | SnapshotField[];
   view_query?: string | null;
+  /** A view's parameters: a list (snapshot) or JSON text (collections API). */
+  view_params?: string | SnapshotViewParam[] | null;
+}
+
+export interface SnapshotViewParam {
+  name: string;
+  type: "text" | "number" | "bool" | "date";
+  default?: unknown;
+  required?: boolean;
+  from?: string;
 }
 
 export interface SnapshotShape {
@@ -70,7 +80,14 @@ export function generateTypes(snapshot: SnapshotShape, opts: GenerateOptions = {
     }
 
     if (col.type === "view") {
-      schemaEntries.push(`  ${quoteKey(col.name)}: { record: ${recordName}; create: never; update: never };`);
+      // The parameters a client sets; one from the signed-in user isn't one.
+      const params = parseViewParams(col.view_params).filter((p) => !p.from && isValidIdent(p.name));
+      if (params.length > 0) {
+        interfaces.push(emitParams(`${baseName}Params`, params));
+        schemaEntries.push(`  ${quoteKey(col.name)}: { record: ${recordName}; create: never; update: never; params: ${baseName}Params };`);
+      } else {
+        schemaEntries.push(`  ${quoteKey(col.name)}: { record: ${recordName}; create: never; update: never };`);
+      }
     } else if (col.type === "singleton") {
       // The one record is made with the collection; there is no create.
       schemaEntries.push(`  ${quoteKey(col.name)}: { record: ${recordName}; create: never; update: ${updateName}; singleton: true };`);
@@ -91,6 +108,26 @@ export function generateTypes(snapshot: SnapshotShape, opts: GenerateOptions = {
 function parseFields(raw: string | SnapshotField[]): SnapshotField[] {
   if (Array.isArray(raw)) return raw;
   try { return JSON.parse(raw) as SnapshotField[]; } catch { return []; }
+}
+
+function parseViewParams(raw: SnapshotCollection["view_params"]): SnapshotViewParam[] {
+  if (!raw) return [];
+  if (Array.isArray(raw)) return raw;
+  try {
+    const v = JSON.parse(raw) as unknown;
+    return Array.isArray(v) ? (v as SnapshotViewParam[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+/** A view's `params` type: required parameters required, a date as text, a Date or Unix seconds. */
+function emitParams(name: string, params: SnapshotViewParam[]): string {
+  const ts = (t: SnapshotViewParam["type"]) =>
+    t === "number" ? "number" : t === "bool" ? "boolean" : t === "date" ? "string | Date | number" : "string";
+  const lines = params.map((p) => `  ${p.name}${p.required ? "" : "?"}: ${ts(p.type)};`);
+  // A type, not an interface: it has to fit the client's ViewParams record.
+  return `export type ${name} = {\n${lines.join("\n")}\n};`;
 }
 
 function emitRecord(name: string, fields: SnapshotField[], col: SnapshotCollection): string {

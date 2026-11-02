@@ -136,6 +136,23 @@ const src = vb.files.url(post.cover, { thumb: "800x0", format: "auto", quality: 
 On older servers `search`, `aggregate()`, `format` and `quality` are not
 available; everything else in this SDK version still works.
 
+## View parameters (server 0.35+)
+
+A view collection whose query uses `:name` placeholders takes their values as
+`params`, on `list`, `get`, `iterate` and `aggregate`:
+
+```ts
+const top = await vb.collection("customer_revenue").list({
+  params: { since: new Date("2026-10-01"), status: "paid" },
+  sort: "-revenue",
+});
+```
+
+A `Date` is sent as ISO 8601. `vb-types` emits a params type per view
+(`CustomerRevenueParams`), so a missing required parameter or a wrong type is
+a compile error. A parameter the view fills from the signed-in user isn't
+settable and isn't in the type.
+
 ## Singleton collections (`vb.singleton`)
 
 A collection of type `singleton` holds exactly one record (site settings, a

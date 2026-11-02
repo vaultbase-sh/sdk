@@ -11,6 +11,8 @@ export interface CollectionTypes<R = AnyRecord, C = AnyRecord, U = AnyRecord> {
   record: R;
   create: C;
   update: U;
+  /** Set by codegen on a view with parameters: what `params` takes. */
+  params?: ViewParams;
   /** Set by codegen on singleton collections, which `vb.singleton()` accepts. */
   singleton?: true;
 }
@@ -39,7 +41,17 @@ export interface ListResponse<T> {
   totalPages: number;
 }
 
-export interface ListOptions {
+/** A view parameter's value; a Date is sent as ISO 8601. */
+export type ViewParamValue = string | number | boolean | Date;
+/**
+ * Values for a view collection's parameters, sent as `?params[name]=…`.
+ * Needs server 0.35.0+.
+ */
+export type ViewParams = Record<string, ViewParamValue | undefined>;
+
+export interface ListOptions<P extends ViewParams = ViewParams> {
+  /** A view's parameters (`:name` in its query). */
+  params?: P;
   page?: number;
   perPage?: number;
   filter?: string;
@@ -60,7 +72,9 @@ export interface ListOptions {
   signal?: AbortSignal;
 }
 
-export interface AggregateOptions {
+export interface AggregateOptions<P extends ViewParams = ViewParams> {
+  /** A view's parameters (`:name` in its query). */
+  params?: P;
   /** `count`, `count(f)`, `sum(f)`, `avg(f)`, `min(f)`, `max(f)`; array or comma-separated. Default `count`. */
   agg?: string | string[];
   /** Up to 3 fields; date fields take a bucket, e.g. `created:month`. */

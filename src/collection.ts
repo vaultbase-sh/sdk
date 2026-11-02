@@ -7,6 +7,7 @@ import type {
   AggregateRow,
   ListResponse,
   MutationOptions,
+  ViewParams,
 } from "./types.ts";
 
 export interface ConcurrencyOptions {
@@ -19,7 +20,9 @@ export interface ConcurrencyOptions {
   ifMatch?: string | "auto" | false;
 }
 
-export interface GetOptions extends MutationOptions {
+export interface GetOptions<P extends ViewParams = ViewParams> extends MutationOptions {
+  /** A view's parameters (`:name` in its query). Needs server 0.35.0+. */
+  params?: P;
   /** Relations to expand, comma-separated (same syntax as `list`). Needs server 0.26.1+. */
   expand?: string;
   /** Fields to return, comma-separated (same syntax as `list`). Needs server 0.26.1+. */
@@ -41,12 +44,14 @@ export class Collection<
   R = AnyRecord,
   C = AnyRecord,
   U = AnyRecord,
+  P extends ViewParams = ViewParams,
 > {
   constructor(private readonly client: HttpClient, private readonly name: string) {}
 
   /** Paginated list. Filters / sort / expand pass through to the server expression engine. */
-  async list(options: ListOptions = {}): Promise<ListResponse<R>> {
+  async list(options: ListOptions<P> = {}): Promise<ListResponse<R>> {
     const query: Record<string, string | number | boolean | undefined> = {
+      ...paramsQuery(options.params),
       page: options.page,
       perPage: options.perPage,
       filter: options.filter,
@@ -65,9 +70,10 @@ export class Collection<
   }
 
   /** Count / sum / avg / min / max over the records a list would return, optionally grouped. */
-  async aggregate(options: AggregateOptions = {}): Promise<AggregateRow[]> {
+  async aggregate(options: AggregateOptions<P> = {}): Promise<AggregateRow[]> {
     const join = (v: string | string[] | undefined) => (Array.isArray(v) ? v.join(",") : v);
     const query: Record<string, string | number | boolean | undefined> = {
+      ...paramsQuery(options.params),
       agg: join(options.agg),
       groupBy: join(options.groupBy),
       filter: options.filter,
@@ -83,7 +89,7 @@ export class Collection<
   }
 
   /** Iterate every record matching the filter. Internal pagination. */
-  async *iterate(options: Omit<ListOptions, "page"> = {}): AsyncGenerator<R, void, void> {
+  async *iterate(options: Omit<ListOptions<P>, "page"> = {}): AsyncGenerator<R, void, void> {
     const perPage = options.perPage ?? 100;
     let page = 1;
     while (true) {
@@ -99,9 +105,9 @@ export class Collection<
     }
   }
 
-  async get(id: string, opts: GetOptions = {}): Promise<R> {
-    const { expand, fields, exclude, ...rest } = opts;
-    const query: Record<string, string | undefined> = { expand, fields, exclude };
+  async get(id: string, opts: GetOptions<P> = {}): Promise<R> {
+    const { expand, fields, exclude, params, ...rest } = opts;
+    const query: Record<string, string | undefined> = { ...paramsQuery(params), expand, fields, exclude };
     return await this.client.request<R>(`/api/v1/${this.encName()}/${enc(id)}`, { query, ...rest });
   }
 
@@ -155,6 +161,19 @@ export class Collection<
 }
 
 /** Helper type bridging Schema to Collection generics. */
-export type CollectionFor<T extends CollectionTypes> = Collection<T["record"], T["create"], T["update"]>;
+export type CollectionFor<T extends CollectionTypes> = Collection<
+  T["record"], T["create"], T["update"],
+  T extends { params: infer P extends ViewParams } ? P : ViewParams
+>;
 
 function enc(s: string): string { return encodeURIComponent(s); }
+
+/** `params[name]` query keys for a view's parameters; a Date as ISO 8601. */
+function paramsQuery(params: ViewParams | undefined): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(params ?? {})) {
+    if (v === undefined || v === null) continue;
+    out[`params[${k}]`] = v instanceof Date ? v.toISOString() : String(v);
+  }
+  return out;
+}

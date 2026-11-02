@@ -23,6 +23,8 @@ import type {
   SubscribeCallback,
   SubscribeFilter,
   UploadOptions,
+  ViewParams,
+  ViewParamValue,
 } from "./types.ts";
 
 export interface VaultbaseOptions extends Partial<Omit<ClientOptions, "baseUrl">> {
@@ -201,4 +203,6 @@ export type {
   SubscribeCallback,
   SubscribeFilter,
   UploadOptions,
+  ViewParams,
+  ViewParamValue,
 };
