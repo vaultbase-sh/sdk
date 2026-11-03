@@ -73,13 +73,15 @@ const meta = await vb.files.upload("posts", post.id, "cover", file, {
 const url = vb.files.url(meta.filename);
 
 // Batch (≤ 100 ops, atomic, per-op tuple result)
-const [created, fetched, listed] = await vb.batch()
+const [created, fetched] = await vb.batch()
   .create("posts", { title: "x" })
   .get("users", "u1")
-  .list("posts", { perPage: 10 })
   .run();
 created.body.title;          // typed as PostRecord
 fetched.body.email;          // typed as UserRecord
+
+// Lists go in a batch of reads (a batch that writes can't list).
+const [listed] = await vb.batch().list("posts", { perPage: 10 }).run();
 listed.body.data[0].title;   // typed as ListResponse<PostRecord>
 ```
 
