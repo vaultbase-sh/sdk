@@ -1,4 +1,4 @@
-import { VaultbaseError } from "./errors.ts";
+import { VaultbaseError, type AuthOperation, type AuthReason } from "./errors.ts";
 import { CancelRegistry } from "./cancel.ts";
 import type { AuthStore } from "./auth/store.ts";
 import { RefreshCoordinator } from "./auth/refresh.ts";
@@ -17,6 +17,27 @@ export interface ClientOptions {
   authTransport?: "header" | "cookie-only";
   /** Send `credentials: "include"` so cookie-mode auth rides along. */
   withCredentials?: boolean;
+  /**
+   * When to `console.warn` the server's warnings (a `Vaultbase-Warning`
+   * header, a realtime `warning` frame). `"dev"` (the default) warns unless
+   * `process.env.NODE_ENV` is `"production"`; `onWarning` is called either way.
+   */
+  warnings?: "dev" | "always" | "off";
+  /** Called with each server warning (server 0.42+), whatever `warnings` says. */
+  onWarning?: (warning: VaultbaseWarning) => void;
+}
+
+/** A warning the server sent: a typo'd sort field or expand, a subscription to a collection that doesn't exist. */
+export interface VaultbaseWarning {
+  /** `http`: a `Vaultbase-Warning` response header. `realtime`: a `warning` frame. */
+  source: "http" | "realtime";
+  message: string;
+  /** `http`: the request's method and path. */
+  method?: string;
+  path?: string;
+  /** `realtime`: the frame's reason (e.g. `unknown_collection`) and topic. */
+  reason?: string;
+  topic?: string;
 }
 
 export interface RequestOptions {
@@ -35,6 +56,8 @@ export interface RequestOptions {
    * refresh from inside it, so it never settled.
    */
   skipRefresh?: boolean;
+  /** @internal The bearer token this request sent, so a refusal only ends that session. */
+  sentToken?: string;
   /** @internal Set on the one retry after a 401 + refresh. */
   retried?: boolean;
   /**
@@ -101,6 +124,8 @@ export class HttpClient {
   /** Whether requests send cookies (`credentials: "include"`). */
   readonly withCredentials: boolean;
   private readonly authTransport: "header" | "cookie-only";
+  private readonly warnings: "dev" | "always" | "off";
+  private readonly onWarning: ((w: VaultbaseWarning) => void) | undefined;
 
   constructor(opts: ClientOptions) {
     this.baseUrl = opts.baseUrl.replace(/\/+$/, "");
@@ -109,7 +134,17 @@ export class HttpClient {
     this.defaultAutoCancel = opts.defaultAutoCancel ?? false;
     this.withCredentials = opts.withCredentials ?? true;
     this.authTransport = opts.authTransport ?? "header";
+    this.warnings = opts.warnings ?? "dev";
+    this.onWarning = opts.onWarning;
     this.refresher = new RefreshCoordinator(this);
+  }
+
+  /** @internal Hand a server warning to `onWarning` and, per the `warnings` option, the console. */
+  emitWarning(w: VaultbaseWarning): void {
+    try { this.onWarning?.(w); } catch { /* the app's callback mustn't break the request */ }
+    if (this.warnings === "off" || (this.warnings === "dev" && !isDevelopment())) return;
+    const where = w.source === "realtime" ? "realtime" : `${w.method ?? "GET"} ${w.path ?? ""}`;
+    console.warn(`[vaultbase] ${where}: ${w.message}`);
   }
 
   /** Raw HTTP request. Translates status codes into `VaultbaseError`. */
@@ -125,6 +160,7 @@ export class HttpClient {
         if (stored?.token) headers.Authorization = `Bearer ${stored.token}`;
       }
     }
+    const sentToken = headers.Authorization ? this.authStore.get()?.token : undefined;
 
     // Cancellation wiring
     let signal: AbortSignal | undefined = options.signal;
@@ -166,7 +202,7 @@ export class HttpClient {
       // would let a blind retry of the same update overwrite the other write.
       if (res.ok) this.captureEtag(path, res);
       options.onResponse?.(res);
-      const out = await this.handleResponse<T>(res, path, { ...options, ...(signal ? { signal } : {}) });
+      const out = await this.handleResponse<T>(res, path, { ...options, ...(signal ? { signal } : {}), ...(sentToken ? { sentToken } : {}) });
       if (signal?.aborted) throw VaultbaseError.aborted();
       return out;
     } catch (e) {
@@ -209,6 +245,22 @@ export class HttpClient {
 
   /** @internal A response to the client's result or error; also used by the XHR upload path. */
   async handleResponse<T>(res: Response, path: string, options: RequestOptions): Promise<T> {
+    const warning = res.headers.get("vaultbase-warning");
+    if (warning) {
+      const method = options.method ?? "GET";
+      for (const message of warning.split(" | ").map((m) => m.trim()).filter(Boolean)) {
+        this.emitWarning({ source: "http", message, method, path });
+      }
+    }
+    try {
+      return await this.decodeResponse<T>(res, path, options);
+    } catch (e) {
+      if (e instanceof VaultbaseError && e.status === undefined && e.kind !== "aborted" && e.kind !== "network") e.status = res.status;
+      throw e;
+    }
+  }
+
+  private async decodeResponse<T>(res: Response, path: string, options: RequestOptions): Promise<T> {
     if (res.status === 429) {
       const retryAfter = parseFloat(res.headers.get("retry-after") ?? "1");
       const retryAfterMs = Math.min(Number.isFinite(retryAfter) ? retryAfter * 1000 : 1000, 10_000);
@@ -247,11 +299,24 @@ export class HttpClient {
       this.authStore.set(null);
       throw VaultbaseError.auth("expired", extractMessage(data) ?? "Unauthorized");
     }
-    if (res.status === 403) throw VaultbaseError.auth("forbidden", extractMessage(data) ?? "Forbidden");
-    if (res.status === 422) {
-      const details = (data as { details?: Record<string, string> } | null)?.details ?? {};
-      throw VaultbaseError.validation(extractMessage(data) ?? "Validation failed", details);
+    if (res.status === 403) {
+      const info = forbiddenInfo(data);
+      let reason: AuthReason = "forbidden";
+      if (info.serverReason === "token_invalid") {
+        // The server refused the token itself: that session is over. Only
+        // clear it if it's still the one this request sent.
+        reason = "expired";
+        if (options.sentToken && this.authStore.get()?.token === options.sentToken) this.authStore.set(null);
+      } else if (info.serverReason === "not_signed_in") {
+        reason = "not_signed_in";
+      }
+      throw VaultbaseError.auth(reason, extractMessage(data) ?? "Forbidden", info);
     }
+    if (res.status === 400 || res.status === 422) {
+      const details = (data as { details?: Record<string, string> } | null)?.details ?? {};
+      throw VaultbaseError.validation(extractMessage(data) ?? (res.status === 400 ? "Bad request" : "Validation failed"), details);
+    }
+    if (res.status === 404) throw VaultbaseError.notFound(extractMessage(data) ?? "Not found", data ?? undefined);
     if (res.status === 409) throw VaultbaseError.conflict(409, extractMessage(data) ?? "Conflict");
     if (res.status === 412) {
       const etag = res.headers.get("etag") ?? undefined;
@@ -280,7 +345,14 @@ export class HttpClient {
     return data as T;
   }
 
-  /** Decide if the stored token is close to expiring; if so, refresh once (mutex'd). */
+  /**
+   * Decide if the stored token is close to expiring; if so, refresh once
+   * (mutex'd). When the server refuses the refresh, the session is over:
+   * it's cleared and this throws `auth`/`expired`, instead of sending the
+   * request without a token (which came back as a confusing `forbidden`).
+   * A refresh that couldn't be answered (offline, 5xx) keeps the session and
+   * lets the request go.
+   */
   async maybeRefresh(): Promise<void> {
     const stored = this.authStore.get();
     if (!stored?.token) return;
@@ -288,7 +360,13 @@ export class HttpClient {
     if (!claims?.exp) return;
     const now = Math.floor(Date.now() / 1000);
     if (claims.exp - now > REFRESH_LEAD_SECONDS) return;
-    await this.refresher.refreshOnce().catch(() => false);
+    const ok = await this.refresher.refreshOnce().catch(() => null);
+    if (ok !== false) return;
+    const current = this.authStore.get()?.token;
+    // Signed in again while the refresh ran: send with that session.
+    if (current && current !== stored.token) return;
+    if (current) this.authStore.set(null);
+    throw VaultbaseError.auth("expired", "Session expired; sign in again");
   }
 }
 
@@ -298,6 +376,29 @@ function extractMessage(body: unknown): string | null {
     if (typeof e === "string") return e;
   }
   return null;
+}
+
+/** `operation` and `reason` from a 403 body (server 0.42+; absent on older servers). */
+function forbiddenInfo(body: unknown): { operation?: AuthOperation; serverReason?: string } {
+  if (!body || typeof body !== "object") return {};
+  const o = body as Record<string, unknown>;
+  const ops: readonly string[] = ["create", "update", "delete", "view", "list"];
+  return {
+    ...(typeof o["operation"] === "string" && ops.includes(o["operation"]) ? { operation: o["operation"] as AuthOperation } : {}),
+    ...(typeof o["reason"] === "string" ? { serverReason: o["reason"] } : {}),
+  };
+}
+
+/**
+ * Not a production build. Bundlers replace `process.env.NODE_ENV` with a
+ * literal; a browser without that (no `process`) counts as development.
+ */
+function isDevelopment(): boolean {
+  try {
+    return process.env.NODE_ENV !== "production";
+  } catch {
+    return true;
+  }
 }
 
 /** The `maintenance` object of a maintenance-mode 503, or null for any other body. */

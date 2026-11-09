@@ -94,14 +94,16 @@ d("integration — SDK ↔ live Vaultbase", () => {
   });
 
   it("batch endpoint executes mixed ops", async () => {
+    // A batch that writes can't also list (the server answers 422); lists go
+    // in a batch of reads.
     const r = await vb.batch()
       .create("posts", { title: "b1" })
       .create("posts", { title: "b2" })
-      .list("posts", { filter: 'title ~ "b"', perPage: 5 })
       .run();
-    expect(r.length).toBe(3);
+    expect(r.length).toBe(2);
     expect(r[0]?.status).toBeGreaterThanOrEqual(200);
-    expect(r[2]?.status).toBeGreaterThanOrEqual(200);
+    const reads = await vb.batch().list("posts", { filter: 'title ~ "b"', perPage: 5 }).run();
+    expect(reads[0]?.status).toBe(200);
   });
 
   it("file upload + URL builder + delete", async () => {

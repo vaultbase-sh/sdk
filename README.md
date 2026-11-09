@@ -326,7 +326,7 @@ Every call rejects with a `VaultbaseError`. Switch on `kind` instead of
 string-matching:
 
 ```ts
-import { isVaultbaseError } from "@vaultbase/sdk";
+import { isVaultbaseError, type VaultbaseError } from "@vaultbase/sdk";
 
 try {
   await vb.collection("posts").create({});
@@ -334,16 +334,73 @@ try {
   if (!isVaultbaseError(e)) throw e;
   switch (e.kind) {
     case "validation":          showFieldErrors(e.data.details); break;
-    case "auth":                redirectToLogin(); break;
+    case "auth":                handleAuth(e); break;
+    case "not_found":           show404(); break;
     case "rate_limit":          await sleep(e.data.retryAfterMs); break;
     case "network":             toast("offline"); break;
-    case "conflict":            reload(); break;
+    case "conflict":            showMessage(e.message); break;
     case "precondition_failed": reloadAndMerge(e.data.currentEtag); break;
     case "maintenance":         showDownPage(e.data.message, e.data.until); break;
     case "server":              report(e.data.status); break;
     case "aborted":             /* intentional, ignore */ break;
   }
 }
+```
+
+| `kind` | When |
+|---|---|
+| `validation` | 422, or 400 (a bad filter, sort or body). `data.details` maps fields to messages. |
+| `auth` | 401 and 403. See `reason` below. |
+| `not_found` | 404: the record, collection or route doesn't exist, or the caller can't see it. |
+| `conflict` | 409, e.g. registering an email that's already taken (`message` is the server's). |
+| `precondition_failed` | 412: the `If-Match` ETag no longer matches. |
+| `rate_limit` | 429. `data.retryAfterMs`. |
+| `maintenance` | 503 from a server in maintenance mode. |
+| `server` | Any other non-2xx (5xx and the rest). `data.status`, `data.body`. |
+| `network`, `aborted` | No response, or the request was cancelled. |
+
+Every error from a response also has `e.status` (the HTTP status).
+
+`auth` errors carry `data.reason`:
+
+| `reason` | Meaning | What to do |
+|---|---|---|
+| `expired` | The session ended: the token expired and couldn't be refreshed, or the server refused it (`token_invalid`). The SDK has cleared it, and a request it couldn't refresh for isn't sent. | Show sign-in. |
+| `not_signed_in` | The request had no session and the collection's rule needs one. | Show sign-in. |
+| `forbidden` | A rule or an admin-only endpoint refused the caller. | Show "not allowed". |
+| `invalid` | Wrong credentials. | Show the form error. |
+
+On server 0.42+, a 403 also tells you which operation was refused and why:
+`e.operation` (`create`, `update`, `delete`, `view`, `list`) and
+`e.serverReason` (`not_signed_in`, `rule_denied`, `admin_only`,
+`token_invalid`). Both are `undefined` on older servers.
+
+```ts
+function handleAuth(e: VaultbaseError) {
+  if (e.data.kind !== "auth") return;
+  if (e.data.reason === "expired" || e.data.reason === "not_signed_in") redirectToLogin();
+  else toast(`You can't ${e.operation ?? "do"} this`);
+}
+```
+
+## Server warnings
+
+The server (0.42+) warns about requests that work but probably don't do what
+you meant: a sort field or expand that doesn't exist, a realtime subscription
+to a collection that doesn't exist. The SDK logs them with
+`console.warn("[vaultbase] ...")` in development (unless
+`process.env.NODE_ENV` is `"production"`), and hands each one to `onWarning`:
+
+```ts
+const vb = new Vaultbase({
+  baseUrl,
+  warnings: "dev",             // "dev" (default) | "always" | "off": console only
+  onWarning: (w) => {          // always called, whatever `warnings` says
+    // w.source: "http" | "realtime"; w.message
+    // http: w.method, w.path; realtime: w.reason, w.topic
+    reportToSentry(w);
+  },
+});
 ```
 
 ## Auto-cancel

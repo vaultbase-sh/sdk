@@ -54,6 +54,8 @@ export class Vaultbase<S extends DefaultSchema = DefaultSchema> {
     if (opts.defaultAutoCancel !== undefined) clientOpts.defaultAutoCancel = opts.defaultAutoCancel;
     if (opts.authTransport) clientOpts.authTransport = opts.authTransport;
     if (opts.withCredentials !== undefined) clientOpts.withCredentials = opts.withCredentials;
+    if (opts.warnings) clientOpts.warnings = opts.warnings;
+    if (opts.onWarning) clientOpts.onWarning = opts.onWarning;
     this.client = new HttpClient(clientOpts);
 
     this.auth = createAuth<S>(this.client);
@@ -159,7 +161,7 @@ function createAuth<S extends DefaultSchema>(client: HttpClient): AuthInterface<
 
 // ── Public re-exports ───────────────────────────────────────────────────────
 
-export { HttpClient, EtagCache } from "./client.ts";
+export { HttpClient, EtagCache, type VaultbaseWarning } from "./client.ts";
 export { Collection, type ConcurrencyOptions, type GetOptions, type UpdateOptions, type DeleteOptions } from "./collection.ts";
 export { Singleton, type SingletonGetOptions, type SingletonFor } from "./singleton.ts";
 export { Files, type FileUrlParams } from "./files.ts";
@@ -188,6 +190,8 @@ export {
   isVaultbaseError,
   type VaultbaseErrorData,
   type ErrorKind,
+  type AuthReason,
+  type AuthOperation,
 } from "./errors.ts";
 export type {
   AggregateOptions,

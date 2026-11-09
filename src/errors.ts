@@ -9,14 +9,37 @@ export type ErrorKind =
   | "validation"
   | "rate_limit"
   | "conflict"
+  | "not_found"
   | "precondition_failed"
   | "server"
   | "maintenance"
   | "aborted";
 
 export interface NetworkErrorData    { kind: "network"; message: string; cause?: unknown }
-export interface AuthErrorData       { kind: "auth"; message: string; reason: "expired" | "invalid" | "forbidden" }
+/** The operation a 403 refused, as the server names it (server 0.42+). */
+export type AuthOperation = "create" | "update" | "delete" | "view" | "list";
+/**
+ * `expired`: the session ended (the token expired or the server refused it);
+ * it has been cleared, so show sign-in.
+ * `not_signed_in`: the request had no session and the rule needs one; show sign-in.
+ * `invalid`: wrong credentials, or a 401 on a request sent without the session.
+ * `forbidden`: signed in (or not required to be), but a rule or an admin-only
+ * endpoint refused it.
+ */
+export type AuthReason = "expired" | "invalid" | "forbidden" | "not_signed_in";
+export interface AuthErrorData {
+  kind: "auth";
+  message: string;
+  reason: AuthReason;
+  /** The refused operation, from a 403 body (server 0.42+). */
+  operation?: AuthOperation;
+  /** The server's own reason, from a 403 body: `not_signed_in`, `rule_denied`, `admin_only` or `token_invalid` (server 0.42+). */
+  serverReason?: string;
+}
+/** 422, or a 400 (a bad filter, sort or request body). `details` maps fields to messages when the server sends them. */
 export interface ValidationErrorData { kind: "validation"; message: string; details: Record<string, string> }
+/** 404: the record, collection or route doesn't exist (or the caller may not see it). */
+export interface NotFoundErrorData   { kind: "not_found"; message: string; body?: unknown }
 export interface RateLimitErrorData  { kind: "rate_limit"; message: string; retryAfterMs: number }
 export interface ConflictErrorData   { kind: "conflict"; message: string; serverCode: 409 | 422 }
 export interface ServerErrorData     { kind: "server"; message: string; status: number; body?: unknown }
@@ -47,6 +70,7 @@ export type VaultbaseErrorData =
   | ValidationErrorData
   | RateLimitErrorData
   | ConflictErrorData
+  | NotFoundErrorData
   | PreconditionFailedErrorData
   | ServerErrorData
   | MaintenanceErrorData
@@ -55,6 +79,8 @@ export type VaultbaseErrorData =
 export class VaultbaseError extends Error {
   readonly kind: ErrorKind;
   readonly data: VaultbaseErrorData;
+  /** The HTTP status, when the error came from a response. */
+  status?: number;
 
   constructor(data: VaultbaseErrorData) {
     super(data.message);
@@ -67,8 +93,17 @@ export class VaultbaseError extends Error {
   static network(message: string, cause?: unknown): VaultbaseError {
     return new VaultbaseError({ kind: "network", message, ...(cause !== undefined ? { cause } : {}) });
   }
-  static auth(reason: AuthErrorData["reason"], message?: string): VaultbaseError {
-    return new VaultbaseError({ kind: "auth", reason, message: message ?? `Authentication failed: ${reason}` });
+  /** `auth` errors: the refused operation (server 0.42+). */
+  get operation(): AuthOperation | undefined { return this.data.kind === "auth" ? this.data.operation : undefined; }
+  /** `auth` errors: the server's reason from a 403 body (server 0.42+). */
+  get serverReason(): string | undefined { return this.data.kind === "auth" ? this.data.serverReason : undefined; }
+
+  static auth(reason: AuthReason, message?: string, extra: { operation?: AuthOperation; serverReason?: string } = {}): VaultbaseError {
+    return new VaultbaseError({
+      kind: "auth", reason, message: message ?? `Authentication failed: ${reason}`,
+      ...(extra.operation !== undefined ? { operation: extra.operation } : {}),
+      ...(extra.serverReason !== undefined ? { serverReason: extra.serverReason } : {}),
+    });
   }
   static validation(message: string, details: Record<string, string> = {}): VaultbaseError {
     return new VaultbaseError({ kind: "validation", message, details });
@@ -78,6 +113,9 @@ export class VaultbaseError extends Error {
   }
   static conflict(serverCode: 409 | 422, message: string): VaultbaseError {
     return new VaultbaseError({ kind: "conflict", message, serverCode });
+  }
+  static notFound(message = "Not found", body?: unknown): VaultbaseError {
+    return new VaultbaseError({ kind: "not_found", message, ...(body !== undefined ? { body } : {}) });
   }
   static server(status: number, message: string, body?: unknown): VaultbaseError {
     return new VaultbaseError({ kind: "server", message, status, ...(body !== undefined ? { body } : {}) });

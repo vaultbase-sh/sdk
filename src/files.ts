@@ -149,6 +149,7 @@ export class Files {
   private async uploadXhr(path: string, body: FormData, opts: UploadOptions): Promise<unknown> {
     if (opts.signal?.aborted) throw VaultbaseError.aborted();
     await this.client.maybeRefresh();
+    const sentToken = this.client.authStore.get()?.token;
     const res = await new Promise<Response>((resolve, reject) => {
       const xhr = new XMLHttpRequest();
       xhr.open("POST", this.client.buildUrl(path));
@@ -167,13 +168,17 @@ export class Files {
       xhr.onabort = () => { done(); reject(VaultbaseError.aborted()); };
       xhr.onload = () => {
         done();
+        const headers: Record<string, string> = {};
         const type = xhr.getResponseHeader("content-type");
-        resolve(new Response(xhr.responseText, { status: xhr.status, headers: type ? { "content-type": type } : {} }));
+        if (type) headers["content-type"] = type;
+        const warning = xhr.getResponseHeader("vaultbase-warning");
+        if (warning) headers["vaultbase-warning"] = warning;
+        resolve(new Response(xhr.responseText, { status: xhr.status, headers }));
       };
       xhr.send(body);
     });
     // A 401 refreshes once and retries over fetch (without progress events).
-    return await this.client.handleResponse(res, path, { method: "POST", body, ...(opts.signal ? { signal: opts.signal } : {}) });
+    return await this.client.handleResponse(res, path, { method: "POST", body, ...(opts.signal ? { signal: opts.signal } : {}), ...(sentToken ? { sentToken } : {}) });
   }
 }
 

@@ -6,6 +6,8 @@ const HEARTBEAT_MS = 30_000;
 /** A connection must stay up this long before the backoff starts over. */
 const STABLE_MS = 5_000;
 
+interface WarningFrame { type: "warning"; reason?: unknown; topic?: unknown; message?: unknown }
+
 /** Internal subscription record. */
 interface Sub<R = AnyRecord> {
   collection: string;
@@ -72,6 +74,16 @@ export class RealtimeManager {
       // A store without onChange can't notify us; send the new token directly.
       if (ok && !this.client.authStore.onChange) this.transport?.auth(this.client.authStore.get()?.token ?? null);
     }).catch(() => {});
+  }
+
+  /** A `warning` frame (server 0.42+), e.g. a subscription to a collection that doesn't exist. */
+  private onWarningFrame(f: WarningFrame): void {
+    const reason = typeof f.reason === "string" ? f.reason : undefined;
+    const topic = typeof f.topic === "string" ? f.topic : undefined;
+    const message = typeof f.message === "string" && f.message
+      ? f.message
+      : `${reason ?? "warning"}${topic ? ` (topic '${topic}')` : ""}`;
+    this.client.emitWarning({ source: "realtime", message, ...(reason ? { reason } : {}), ...(topic ? { topic } : {}) });
   }
 
   subscribe<R = AnyRecord>(collection: string, filter: SubscribeFilter, cb: SubscribeCallback<R>): () => void {
@@ -222,6 +234,7 @@ export class RealtimeManager {
           const data = JSON.parse(typeof e.data === "string" ? e.data : "");
           if (data?.type === "connected") return;
           if (data?.type === "auth_expired") { this.onAuthExpired(); return; }
+          if (data?.type === "warning") { this.onWarningFrame(data); return; }
           if (data?.type === "error" && data?.reason === "origin_not_allowed") {
             this.refused = true;
             console.warn("[vaultbase] realtime: this origin isn't in the server's allowed origins; not reconnecting");
@@ -285,8 +298,9 @@ export class RealtimeManager {
       });
       es.addEventListener("message", (ev: MessageEvent) => {
         try {
-          const data = JSON.parse(ev.data) as RealtimeEvent | { type: "auth_expired" };
+          const data = JSON.parse(ev.data) as RealtimeEvent | { type: "auth_expired" } | WarningFrame;
           if (data?.type === "auth_expired") { this.onAuthExpired(); return; }
+          if (data?.type === "warning") { this.onWarningFrame(data as WarningFrame); return; }
           if ("collection" in data && data.collection && data.type) this.deliver(data as RealtimeEvent);
         } catch { /* drop */ }
       });
