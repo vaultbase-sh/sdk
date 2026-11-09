@@ -38,41 +38,53 @@ bun add @vaultbase/sdk
 
 ## Quick start
 
+This continues the server's [quick start](https://docs.vaultbase.dev/getting-started/quick-start/):
+it uses its `posts` collection (`title`, `body`) and the `users` account you
+signed up there.
+
 ```ts
 import { Vaultbase } from "@vaultbase/sdk";
-import type { Schema } from "./vaultbase-schema.gen";  // optional, from codegen
 
-const vb = new Vaultbase<Schema>({ baseUrl: "https://api.example.com" });
+const vb = new Vaultbase({ baseUrl: "http://localhost:8091" });
 
-// Auth
-const { token, record } = await vb.auth.users.login({
-  email: "alice@x.com",
-  password: "supersecret",
+// Sign in as the user from the quick start
+const session = await vb.auth.users.login({
+  email: "alice@example.com",
+  password: "correct-horse-battery",
 });
+if ("mfa_required" in session) throw new Error("this account has MFA on");
 
-// Records — typed end-to-end
-const post = await vb.collection("posts").create({ title: "hi", author: record.id });
+// Create a post. The create rule is "Auth only", so this needs the sign-in
+const post = await vb.collection("posts").create({ title: "hello from the SDK", body: "world" });
+console.log("created", post.id);
 
-// Safe filter via tagged template (escapes + quotes per type)
-const list = await vb.collection("posts").list({
-  filter: vb.q`status = ${"published"} && title ~ ${userTerm}`,
-  sort: '-created',
-  perPage: 30,
-});
+// List the posts whose title contains "hello", newest first
+const list = await vb.collection("posts").list({ filter: 'title ~ "hello"', sort: "-created" });
+console.log(list.totalItems, list.data.map((p) => p.title));
 
-// Realtime — WebSocket with SSE auto-fallback
-const off = vb.subscribe("posts", "*", (e) => {
-  console.log(e.type, e.record);
-});
-off();
+// Print every change to posts as it happens. Create or edit a post in the
+// admin to see one. Call off() to stop.
+const off = vb.subscribe("posts", "*", (ev) => console.log(ev.type, ev.record));
+```
 
-// Files
+For typed records, generate a `Schema` with [`vb-types`](#codegen--vb-types)
+and pass it as `new Vaultbase<Schema>(...)`.
+
+## Files
+
+Needs a file field on the collection. See the [Files docs](https://docs.vaultbase.dev/sdk/files/).
+
+```ts
 const meta = await vb.files.upload("posts", post.id, "cover", file, {
   onProgress: ({ loaded, total }) => console.log(loaded / total),
 });
 const url = vb.files.url(meta.filename);
+```
 
-// Batch (≤ 100 ops, atomic, per-op tuple result)
+## Batch
+
+```ts
+// ≤ 100 ops, atomic, per-op tuple result
 const [created, fetched] = await vb.batch()
   .create("posts", { title: "x" })
   .get("users", "u1")
@@ -84,6 +96,12 @@ fetched.body.email;          // typed as UserRecord
 const [listed] = await vb.batch().list("posts", { perPage: 10 }).run();
 listed.body.data[0].title;   // typed as ListResponse<PostRecord>
 ```
+
+## Custom routes
+
+Routes you add in the admin under **Hooks → Custom routes**
+([docs](https://docs.vaultbase.dev/api/custom-routes/)) are called with
+`vb.custom.get(path, query?)` and `vb.custom.post(path, body?)`.
 
 ## Typed filter builder (`vb.q`)
 
