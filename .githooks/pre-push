@@ -1,0 +1,8 @@
+#!/bin/sh
+# The same checks as prepublishOnly: typecheck, tests, build.
+# Skip once with git push --no-verify.
+set -e
+export PATH="$HOME/.bun/bin:$PATH"
+echo "pre-push: typecheck"; bun run typecheck
+echo "pre-push: tests"; bun run test
+echo "pre-push: build"; bun run build

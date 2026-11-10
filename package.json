@@ -61,7 +61,8 @@
     "build": "tsup",
     "test": "bun test",
     "typecheck": "tsc --noEmit",
-    "prepublishOnly": "bun run typecheck && bun run test && bun run build"
+    "prepublishOnly": "bun run typecheck && bun run test && bun run build",
+    "prepare": "git config core.hooksPath .githooks || true"
   },
   "keywords": [
     "vaultbase",

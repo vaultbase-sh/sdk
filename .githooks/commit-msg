@@ -1,0 +1,6 @@
+#!/bin/sh
+# No AI attribution in commit messages (same rule as the server repo).
+if grep -v "^#" "$1" | grep -Eiq "^co-authored-by:.*(claude|anthropic|openai|copilot|gpt)|generated (with|by) \[?(claude|chatgpt|copilot)|@anthropic\.com"; then
+  echo "commit-msg: the message credits an AI assistant (Co-Authored-By / Generated with). Remove it and commit again." >&2
+  exit 1
+fi
