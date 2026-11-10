@@ -80,6 +80,8 @@ export class RealtimeManager {
   private onWarningFrame(f: WarningFrame): void {
     const reason = typeof f.reason === "string" ? f.reason : undefined;
     const topic = typeof f.topic === "string" ? f.topic : undefined;
+    // System topics (`__flags`) aren't collections; server 0.42.0 warned on them.
+    if (topic?.startsWith("__")) return;
     const message = typeof f.message === "string" && f.message
       ? f.message
       : `${reason ?? "warning"}${topic ? ` (topic '${topic}')` : ""}`;
