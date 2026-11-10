@@ -1,4 +1,4 @@
-import type { HttpClient } from "../client.ts";
+import { isApiToken, type HttpClient } from "../client.ts";
 import type { AnyRecord, RealtimeEvent, SubscribeCallback, SubscribeFilter } from "../types.ts";
 
 const BACKOFF_MS = [250, 500, 1000, 2000, 5000, 10_000];
@@ -67,9 +67,10 @@ export class RealtimeManager {
     });
   }
 
-  /** `auth_expired` from the server: refresh once; the new token is re-sent via watchAuth. */
+  /** `auth_expired` from the server: refresh once; the new token is re-sent via watchAuth. An API token can't be refreshed. */
   private onAuthExpired(): void {
-    if (!this.client.authStore.get()?.token) return;
+    const token = this.client.authStore.get()?.token;
+    if (!token || isApiToken(token)) return;
     void this.client.refresher.refreshOnce().then((ok) => {
       // A store without onChange can't notify us; send the new token directly.
       if (ok && !this.client.authStore.onChange) this.transport?.auth(this.client.authStore.get()?.token ?? null);

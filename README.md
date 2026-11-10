@@ -349,7 +349,7 @@ try {
 
 | `kind` | When |
 |---|---|
-| `validation` | 422, or 400 (a bad filter, sort or body). `data.details` maps fields to messages. |
+| `validation` | 422, or 400 (a bad filter, sort or body). `data.details` maps fields to messages. On server 0.44+ that includes a `sort`, `expand` or `fields` name, or a body key, that the collection doesn't have: see [Unknown names](#unknown-names-server-044). |
 | `auth` | 401 and 403. See `reason` below. |
 | `not_found` | 404: the record, collection or route doesn't exist, or the caller can't see it. |
 | `conflict` | 409, e.g. registering an email that's already taken (`message` is the server's). |
@@ -367,13 +367,13 @@ Every error from a response also has `e.status` (the HTTP status).
 |---|---|---|
 | `expired` | The session ended: the token expired and couldn't be refreshed, or the server refused it (`token_invalid`). The SDK has cleared it, and a request it couldn't refresh for isn't sent. | Show sign-in. |
 | `not_signed_in` | The request had no session and the collection's rule needs one. | Show sign-in. |
-| `forbidden` | A rule or an admin-only endpoint refused the caller. | Show "not allowed". |
+| `forbidden` | A rule or an admin-only endpoint refused the caller, or an API token doesn't have the scope for the request (`insufficient_scope`, server 0.44+). | Show "not allowed". |
 | `invalid` | Wrong credentials. | Show the form error. |
 
 On server 0.42+, a 403 also tells you which operation was refused and why:
 `e.operation` (`create`, `update`, `delete`, `view`, `list`) and
-`e.serverReason` (`not_signed_in`, `rule_denied`, `admin_only`,
-`token_invalid`). Both are `undefined` on older servers.
+`e.serverReason` (`not_signed_in`, `rule_denied`, `admin_only`). Both are
+`undefined` on older servers.
 
 ```ts
 function handleAuth(e: VaultbaseError) {
@@ -383,11 +383,60 @@ function handleAuth(e: VaultbaseError) {
 }
 ```
 
+### A token the server doesn't accept (server 0.44+)
+
+From server 0.44 the records, files and batch APIs answer 401 when the
+request's token is expired, revoked or malformed, even for public data. The
+error has `e.status === 401` and `e.serverReason === "token_invalid"`.
+(Servers 0.42 and 0.43 ran such a request as anonymous and put
+`token_invalid` on the 403 of a refused one, which the SDK also reports as
+`expired`.) An API token without the scope for the request answers 401 too,
+with `e.serverReason === "insufficient_scope"`. What the SDK does depends on
+the token:
+
+- **A session** (a token from `login`): the SDK refreshes it once and sends
+  the request again. If the server refuses the refresh, or refuses the new
+  token too, the session is cleared and the call rejects with `expired`.
+  Requests after that go out without a token.
+- **An API token** (`vbat_…`, set with `vb.client.authStore.set({ token })`)
+  is configuration, not a session: the SDK never refreshes or clears it. An
+  expired or revoked one rejects with `expired` on every call, until you set
+  a new one. One without the scope for the request (a `read` token that
+  writes) rejects with `forbidden` and the server reason
+  `insufficient_scope`: signing in again can't fix it, so nothing is
+  refreshed or cleared, and `e.message` is the server's ("This API token
+  doesn't have the scope for this request").
+
+### Unknown names (server 0.44+)
+
+From server 0.44, a `list` with a `sort`, `expand` or `fields` name the
+collection doesn't have, and a `create` or `update` with a body key that
+isn't a field, reject with `validation` (a 400) instead of being ignored.
+`data.details` is keyed by the query parameter or the body key:
+
+```ts
+try {
+  await vb.collection("posts").list({ sort: "-titel" });
+} catch (e) {
+  if (isVaultbaseError(e) && e.data.kind === "validation") {
+    e.data.details; // { sort: "unknown sort field 'titel'" }
+  }
+}
+// create({ title: "x", colour: "red" })
+//   → details: { colour: "unknown field 'colour' in body" }
+```
+
+A record can still be saved back as it was fetched: `id`, `created`,
+`updated`, `collectionId`, `collectionName` and `expand` are accepted and
+ignored, and so are `email_verified`, `totp_enabled` and `is_anonymous` on an
+auth collection. View collections aren't checked. The SDK adds no keys of its
+own to a query or a body.
+
 ## Server warnings
 
-The server (0.42+) warns about requests that work but probably don't do what
-you meant: a sort field or expand that doesn't exist, a realtime subscription
-to a collection that doesn't exist. The SDK logs them with
+The server (0.42+) warns about a request that works but probably doesn't do
+what you meant. Today that is a realtime subscription to a collection that
+doesn't exist (`source: "realtime"`). The SDK logs warnings with
 `console.warn("[vaultbase] ...")` in development (unless
 `process.env.NODE_ENV` is `"production"`), and hands each one to `onWarning`:
 
@@ -402,6 +451,12 @@ const vb = new Vaultbase({
   },
 });
 ```
+
+The `Vaultbase-Warning` response header (`source: "http"`) is reserved for
+future deprecation notices. Servers 0.42 and 0.43 sent it for an unknown
+sort, expand, fields or body key; server 0.44 answers those with a 400
+([Unknown names](#unknown-names-server-044)) and sends no header. The SDK
+still reads it, so warnings from those two versions keep arriving.
 
 ## Auto-cancel
 

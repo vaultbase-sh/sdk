@@ -232,6 +232,157 @@ d("integration — SDK ↔ live Vaultbase", () => {
     expect((await fetch(second)).status).toBe(200);
   });
 
+  // ── Server 0.44: 401 for a token that isn't accepted, 400 for unknown keys ──
+
+  /** A client of its own (its own session), recording the requests it makes. */
+  function client(token?: string): { vb: Vaultbase; calls: string[] } {
+    const calls: string[] = [];
+    const recording = ((url: string | URL | Request, init?: RequestInit) => {
+      const href = typeof url === "string" ? url : url instanceof URL ? url.href : url.url;
+      calls.push(`${init?.method ?? "GET"} ${new URL(href).pathname}`);
+      return fetch(url, init);
+    }) as typeof fetch;
+    const c = new Vaultbase({ baseUrl: server.baseUrl, authStore: new MemoryAuthStore(), withCredentials: false, fetch: recording });
+    if (token) c.client.authStore.set({ token });
+    return { vb: c, calls };
+  }
+  const caught = async (p: Promise<unknown>) => (await p.catch((e) => e)) as VaultbaseError;
+  interface NoteRecord { id: string; title?: string | null; author?: string | null; [k: string]: unknown }
+  const open = { list_rule: null, view_rule: null, create_rule: null, update_rule: null, delete_rule: null };
+  const INVALID = { kind: "auth", reason: "expired", message: "Token expired or invalid", serverReason: "token_invalid" } as const;
+
+  it("0.44 setup: an auth collection and a collection open to everyone", async () => {
+    await vb.client.request("/api/v1/collections", {
+      method: "POST",
+      body: { name: "members", type: "auth", ...open, fields: [{ name: "nick", type: "text" }] },
+    });
+    await vb.client.request("/api/v1/collections", {
+      method: "POST",
+      body: {
+        name: "notes", type: "base", ...open,
+        fields: [
+          { name: "title", type: "text" },
+          { name: "author", type: "relation", collection: "members" },
+          { name: "cover", type: "file" },
+        ],
+      },
+    });
+    await vb.auth.members.register({ email: "member@test.local", password: "long-password-123" });
+  });
+
+  it("a token the server doesn't accept: 401 on a public read, the session ends, then the read works", async () => {
+    const { vb: stale, calls } = client("not-a-real-token");
+    const err = await caught(stale.collection("notes").list());
+    expect(err).toBeInstanceOf(VaultbaseError);
+    expect(err.data).toEqual(INVALID);
+    expect(err.status).toBe(401);
+    // One request, one refresh the server refused, no retry.
+    expect(calls).toEqual(["GET /api/v1/notes", "POST /api/v1/auth/refresh"]);
+    expect(stale.client.authStore.get()).toBeNull();
+    expect((await stale.collection("notes").list()).data).toBeArray();
+  });
+
+  it("the batch and files APIs answer the same 401", async () => {
+    expect((await caught(client("not-a-real-token").vb.batch().list("notes").run())).data).toEqual(INVALID);
+    expect((await caught(client("not-a-real-token").vb.files.delete("notes", "some-id", "cover"))).data).toEqual(INVALID);
+    const file = new File([new Uint8Array([1])], "a.bin");
+    expect((await caught(client("not-a-real-token").vb.files.upload("notes", "some-id", "cover", file))).data).toEqual(INVALID);
+  });
+
+  it("a token another client already refreshed: 401, one refresh, the request goes through", async () => {
+    const { vb: first } = client();
+    await first.auth.members.login({ email: "member@test.local", password: "long-password-123" });
+    const original = first.client.authStore.get()!.token;
+    const { vb: second, calls } = client(original);
+    await first.auth.shared.refresh(); // ends `original`
+    expect((await second.collection("notes").list()).data).toBeArray();
+    expect(calls).toEqual(["GET /api/v1/notes", "POST /api/v1/auth/refresh", "GET /api/v1/notes"]);
+    expect(second.client.authStore.get()?.token).not.toBe(original);
+    expect(second.client.authStore.get()?.token).toBe(first.client.authStore.get()!.token);
+  });
+
+  it("an API token without the scope is refused, kept, and still reads; revoked, it is reported and kept", async () => {
+    const minted = await vb.client.request<{ id: string; token: string }>("/api/v1/admin/api-tokens", {
+      method: "POST",
+      body: { name: "read-only", scopes: ["read"] },
+    });
+    expect(minted.token).toStartWith("vbat_");
+    const { vb: bot, calls } = client(minted.token);
+    expect((await bot.collection("notes").list()).data).toBeArray();
+
+    const refused = await caught(bot.collection("notes").create({ title: "x" }));
+    expect(refused.data).toEqual({
+      kind: "auth", reason: "forbidden",
+      message: "This API token doesn't have the scope for this request",
+      serverReason: "insufficient_scope",
+    });
+    expect(refused.status).toBe(401);
+    expect(bot.client.authStore.get()?.token).toBe(minted.token);
+    expect((await bot.collection("notes").list()).data).toBeArray();
+
+    await vb.client.request(`/api/v1/admin/api-tokens/${minted.id}`, { method: "DELETE" });
+    expect((await caught(bot.collection("notes").list())).data).toEqual(INVALID);
+    expect(bot.client.authStore.get()?.token).toBe(minted.token);
+    // Never refreshed: the server refuses that for an API token.
+    expect(calls).not.toContain("POST /api/v1/auth/refresh");
+  });
+
+  it("an unknown sort, expand or fields name is a validation error with details", async () => {
+    const err = await caught(vb.collection("notes").list({ sort: "-titel", expand: "autor", fields: "id,titel" }));
+    expect(err.kind).toBe("validation");
+    expect(err.status).toBe(400);
+    expect(err.message).toContain("unknown expand 'autor'");
+    expect(err.data).toMatchObject({
+      details: {
+        sort: "unknown sort field 'titel'",
+        expand: "unknown expand 'autor' (not a relation field)",
+        fields: "unknown field 'titel' in fields",
+      },
+    });
+    // The names the README uses, and the ones a record comes back with.
+    const ok = await vb.collection<NoteRecord>("notes").list({ sort: "-created,title", expand: "author", fields: "id,title,expand" });
+    expect(ok.data).toBeArray();
+  });
+
+  it("a body key that isn't a field is a validation error keyed by that key", async () => {
+    const notes = vb.collection<NoteRecord>("notes");
+    const create = await caught(notes.create({ title: "x", colour: "red" }));
+    expect(create.data).toEqual({ kind: "validation", message: "Unknown field 'colour' in body", details: { colour: "unknown field 'colour' in body" } });
+    const note = await notes.create({ title: "x" });
+    const update = await caught(notes.update(note.id, { titel: "y" }));
+    expect(update.data).toMatchObject({ kind: "validation", details: { titel: "unknown field 'titel' in body" } });
+    expect((await notes.get(note.id)).title).toBe("x");
+  });
+
+  it("a fetched record saves back as it came, expand and auth columns included", async () => {
+    const { vb: member } = client();
+    const session = await member.auth.members.login({ email: "member@test.local", password: "long-password-123" });
+    if ("mfa_required" in session) throw new Error("unexpected MFA");
+    const me = session.record as { id: string };
+
+    const notes = vb.collection<NoteRecord>("notes");
+    const note = await notes.create({ title: "mine", author: me.id });
+    const fetched = await notes.get(note.id, { expand: "author" });
+    expect(Object.keys(fetched)).toEqual(expect.arrayContaining(["id", "created", "updated", "collectionId", "collectionName", "expand"]));
+    expect((await notes.update(note.id, { ...fetched, title: "saved" })).title).toBe("saved");
+
+    const members = member.collection<{ id: string; nick?: string | null; [k: string]: unknown }>("members");
+    const user = await members.get(me.id);
+    expect(Object.keys(user)).toEqual(expect.arrayContaining(["email", "email_verified", "totp_enabled", "is_anonymous"]));
+    expect((await members.update(me.id, { ...user, nick: "kay" })).nick).toBe("kay");
+  });
+
+  it("codegen: every key of a generated Create type is a key the server takes", async () => {
+    const snap = await vb.client.request<SnapshotShape>("/api/v1/admin/migrations/snapshot");
+    const ts = generateTypes(snap);
+    const body = /export interface NotesCreate \{([^}]*)\}/.exec(ts)?.[1] ?? "";
+    const keys = [...body.matchAll(/^\s*([A-Za-z_][A-Za-z0-9_]*)\??:/gm)].map((m) => m[1]!);
+    expect(keys).toEqual(["title", "author", "cover"]);
+    const all = Object.fromEntries(keys.map((k) => [k, null]));
+    const created = await vb.collection<NoteRecord>("notes").create(all);
+    expect((await vb.collection<NoteRecord>("notes").update(created.id, all)).id).toBe(created.id);
+  });
+
   it("error model: 401 → kind=auth", async () => {
     const anon = new Vaultbase({
       baseUrl: server.baseUrl,

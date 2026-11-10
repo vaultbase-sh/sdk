@@ -20,11 +20,12 @@ export interface NetworkErrorData    { kind: "network"; message: string; cause?:
 export type AuthOperation = "create" | "update" | "delete" | "view" | "list";
 /**
  * `expired`: the session ended (the token expired or the server refused it);
- * it has been cleared, so show sign-in.
+ * it has been cleared, so show sign-in. An API token is left in place:
+ * replace it.
  * `not_signed_in`: the request had no session and the rule needs one; show sign-in.
  * `invalid`: wrong credentials, or a 401 on a request sent without the session.
  * `forbidden`: signed in (or not required to be), but a rule or an admin-only
- * endpoint refused it.
+ * endpoint refused it, or an API token doesn't have the scope for the request.
  */
 export type AuthReason = "expired" | "invalid" | "forbidden" | "not_signed_in";
 export interface AuthErrorData {
@@ -33,10 +34,20 @@ export interface AuthErrorData {
   reason: AuthReason;
   /** The refused operation, from a 403 body (server 0.42+). */
   operation?: AuthOperation;
-  /** The server's own reason, from a 403 body: `not_signed_in`, `rule_denied`, `admin_only` or `token_invalid` (server 0.42+). */
+  /**
+   * The server's own reason (server 0.42+). On a 403: `not_signed_in`,
+   * `rule_denied` or `admin_only`. On a 401 (server 0.44+): `token_invalid`,
+   * or `insufficient_scope` for an API token without the scope.
+   * `token_invalid` came on a 403 from servers 0.42 and 0.43.
+   */
   serverReason?: string;
 }
-/** 422, or a 400 (a bad filter, sort or request body). `details` maps fields to messages when the server sends them. */
+/**
+ * 422, or a 400 (a bad filter, sort or request body). `details` maps fields
+ * to messages when the server sends them. For an unknown `sort`, `expand` or
+ * `fields` name or an unknown body key (a 400 from server 0.44), the keys are
+ * the query parameter (`sort`) or the body key itself.
+ */
 export interface ValidationErrorData { kind: "validation"; message: string; details: Record<string, string> }
 /** 404: the record, collection or route doesn't exist (or the caller may not see it). */
 export interface NotFoundErrorData   { kind: "not_found"; message: string; body?: unknown }
@@ -95,7 +106,7 @@ export class VaultbaseError extends Error {
   }
   /** `auth` errors: the refused operation (server 0.42+). */
   get operation(): AuthOperation | undefined { return this.data.kind === "auth" ? this.data.operation : undefined; }
-  /** `auth` errors: the server's reason from a 403 body (server 0.42+). */
+  /** `auth` errors: the server's reason from a 403 or 401 body (server 0.42+). */
   get serverReason(): string | undefined { return this.data.kind === "auth" ? this.data.serverReason : undefined; }
 
   static auth(reason: AuthReason, message?: string, extra: { operation?: AuthOperation; serverReason?: string } = {}): VaultbaseError {

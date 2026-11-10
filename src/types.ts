@@ -55,6 +55,11 @@ export interface ListOptions<P extends ViewParams = ViewParams> {
   page?: number;
   perPage?: number;
   filter?: string;
+  /**
+   * `sort`, `expand` and `fields` take comma-separated names. A name the
+   * collection doesn't have rejects with a `validation` error on server
+   * 0.44+ (older servers ignored it); views aren't checked.
+   */
   sort?: string;
   expand?: string;
   fields?: string;

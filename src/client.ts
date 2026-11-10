@@ -18,8 +18,8 @@ export interface ClientOptions {
   /** Send `credentials: "include"` so cookie-mode auth rides along. */
   withCredentials?: boolean;
   /**
-   * When to `console.warn` the server's warnings (a `Vaultbase-Warning`
-   * header, a realtime `warning` frame). `"dev"` (the default) warns unless
+   * When to `console.warn` the server's warnings (a realtime `warning` frame,
+   * a `Vaultbase-Warning` header). `"dev"` (the default) warns unless
    * `process.env.NODE_ENV` is `"production"`; `onWarning` is called either way.
    */
   warnings?: "dev" | "always" | "off";
@@ -27,7 +27,12 @@ export interface ClientOptions {
   onWarning?: (warning: VaultbaseWarning) => void;
 }
 
-/** A warning the server sent: a typo'd sort field or expand, a subscription to a collection that doesn't exist. */
+/**
+ * A warning the server sent: a realtime subscription to a collection that
+ * doesn't exist, or a `Vaultbase-Warning` response header. Servers 0.42 and
+ * 0.43 sent the header for an unknown sort, expand, fields or body key
+ * (0.44 answers those 400); it is kept for future deprecation notices.
+ */
 export interface VaultbaseWarning {
   /** `http`: a `Vaultbase-Warning` response header. `realtime`: a `warning` frame. */
   source: "http" | "realtime";
@@ -88,6 +93,20 @@ export function decodeJwtPayload(token: string): JwtClaims | null {
 }
 
 const REFRESH_LEAD_SECONDS = 60;
+
+/**
+ * An API token (`vbat_…`, or its bare JWT with `aud: "api"`). It is
+ * configuration, not a session: the server refuses to refresh one, and the
+ * SDK never clears it.
+ */
+export function isApiToken(token: string): boolean {
+  return token.startsWith("vbat_") || hasApiAudience(decodeJwtPayload(token));
+}
+
+function hasApiAudience(claims: JwtClaims | null): boolean {
+  const aud = claims?.["aud"];
+  return aud === "api" || (Array.isArray(aud) && aud[0] === "api");
+}
 
 /**
  * Per-record ETag cache used for optimistic concurrency. Populated whenever
@@ -277,36 +296,53 @@ export class HttpClient {
     }
 
     if (res.status === 401) {
+      const message = extractMessage(data) ?? "Unauthorized";
+      const info = refusalInfo(data);
       // A request sent without the session says nothing about the session:
       // keep it (vb.flags with public evaluation off used to sign users out).
-      if (options.skipAuth) throw VaultbaseError.auth("invalid", extractMessage(data) ?? "Unauthorized");
-      // Try a single refresh+retry for non-auth-flow paths.
-      if (!options.skipAuth && !options.retried && !path.endsWith("/api/v1/auth/refresh")) {
+      if (options.skipAuth) throw VaultbaseError.auth("invalid", message, info);
+      // Server 0.44+, on the records, files and batch APIs. An API token
+      // without the scope for this request: signing in again can't fix it,
+      // and the token is fine for what it does cover, so it stays.
+      if (info.serverReason === "insufficient_scope") throw VaultbaseError.auth("forbidden", message, info);
+      // Server 0.44+, same APIs: a token the server doesn't accept (expired,
+      // revoked, malformed).
+      const tokenInvalid = info.serverReason === "token_invalid";
+      const sent = options.sentToken;
+      // One refresh and one retry, never more: the retry is marked, so a 401
+      // on it ends here whatever the refresh said.
+      const current = this.authStore.get()?.token;
+      // The session this request was sent with is gone (signed out, or ended
+      // by another request's refused refresh): there is nothing to refresh.
+      const gone = !!sent && !current;
+      if (!options.retried && !gone && !(sent && isApiToken(sent)) && !path.endsWith("/api/v1/auth/refresh")) {
+        // The session changed while this request was out (another request
+        // refreshed it, or the user signed in again): send with that one.
+        const replaced = !!sent && !!current && current !== sent;
         // A refresh that couldn't be answered (offline, 5xx) rejects: that
         // error is this request's, and the session stays.
-        const ok = await this.refresher.refreshOnce();
-        if (ok) {
+        if (replaced || await this.refresher.refreshOnce()) {
           // Under this request's key and signal, which it still holds.
           return await this.request<T>(path, { ...options, skipAuth: false, retried: true, requestKey: null });
         }
       }
-      // A token we just refreshed was refused too: this endpoint refuses the
-      // caller (e.g. a route that requires a non-guest account). The session
-      // is fine, so keep it; refreshing again would only loop.
-      if (options.retried) {
-        throw VaultbaseError.auth("forbidden", extractMessage(data) ?? "Unauthorized");
-      }
-      this.authStore.set(null);
-      throw VaultbaseError.auth("expired", extractMessage(data) ?? "Unauthorized");
+      // A token we just refreshed was refused too, and not for being invalid:
+      // this endpoint refuses the caller (e.g. a route that requires a
+      // non-guest account). The session is fine, so keep it.
+      if (options.retried && !tokenInvalid) throw VaultbaseError.auth("forbidden", message, info);
+      // Refused and not refreshable, or the server calls the fresh token
+      // invalid too: the session is over.
+      this.endSession(sent);
+      throw VaultbaseError.auth("expired", message, info);
     }
     if (res.status === 403) {
-      const info = forbiddenInfo(data);
+      const info = refusalInfo(data);
       let reason: AuthReason = "forbidden";
       if (info.serverReason === "token_invalid") {
-        // The server refused the token itself: that session is over. Only
-        // clear it if it's still the one this request sent.
+        // Servers 0.42 and 0.43 (0.44 answers 401): the token was refused
+        // and the request ran as anonymous. That session is over.
         reason = "expired";
-        if (options.sentToken && this.authStore.get()?.token === options.sentToken) this.authStore.set(null);
+        if (options.sentToken) this.endSession(options.sentToken);
       } else if (info.serverReason === "not_signed_in") {
         reason = "not_signed_in";
       }
@@ -346,18 +382,29 @@ export class HttpClient {
   }
 
   /**
+   * End the session a refused request was sent with. A session that replaced
+   * it meanwhile (signed in again) is left alone, and so is an API token:
+   * clearing one would send the next requests as anonymous.
+   */
+  private endSession(sent: string | undefined): void {
+    if (sent === undefined) { this.authStore.set(null); return; }
+    if (isApiToken(sent)) return;
+    if (this.authStore.get()?.token === sent) this.authStore.set(null);
+  }
+
+  /**
    * Decide if the stored token is close to expiring; if so, refresh once
    * (mutex'd). When the server refuses the refresh, the session is over:
    * it's cleared and this throws `auth`/`expired`, instead of sending the
    * request without a token (which came back as a confusing `forbidden`).
    * A refresh that couldn't be answered (offline, 5xx) keeps the session and
-   * lets the request go.
+   * lets the request go. An API token is never refreshed.
    */
   async maybeRefresh(): Promise<void> {
     const stored = this.authStore.get();
-    if (!stored?.token) return;
+    if (!stored?.token || stored.token.startsWith("vbat_")) return;
     const claims = decodeJwtPayload(stored.token);
-    if (!claims?.exp) return;
+    if (!claims?.exp || hasApiAudience(claims)) return;
     const now = Math.floor(Date.now() / 1000);
     if (claims.exp - now > REFRESH_LEAD_SECONDS) return;
     const ok = await this.refresher.refreshOnce().catch(() => null);
@@ -378,8 +425,8 @@ function extractMessage(body: unknown): string | null {
   return null;
 }
 
-/** `operation` and `reason` from a 403 body (server 0.42+; absent on older servers). */
-function forbiddenInfo(body: unknown): { operation?: AuthOperation; serverReason?: string } {
+/** `operation` and `reason` from a 403 or 401 body (server 0.42+; absent on older servers). */
+function refusalInfo(body: unknown): { operation?: AuthOperation; serverReason?: string } {
   if (!body || typeof body !== "object") return {};
   const o = body as Record<string, unknown>;
   const ops: readonly string[] = ["create", "update", "delete", "view", "list"];
