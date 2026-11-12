@@ -162,7 +162,7 @@ function createAuth<S extends DefaultSchema>(client: HttpClient): AuthInterface<
 // ── Public re-exports ───────────────────────────────────────────────────────
 
 export { HttpClient, EtagCache, type VaultbaseWarning } from "./client.ts";
-export { Collection, type ConcurrencyOptions, type GetOptions, type UpdateOptions, type DeleteOptions } from "./collection.ts";
+export { Collection, type ConcurrencyOptions, type CreateOptions, type GetOptions, type UpdateOptions, type DeleteOptions } from "./collection.ts";
 export { Singleton, type SingletonGetOptions, type SingletonFor } from "./singleton.ts";
 export { Files, type FileUrlParams } from "./files.ts";
 export { Batch, type BatchGetOptions, type BatchOpResult, type BatchDeleteResult, type BatchResult } from "./batch.ts";

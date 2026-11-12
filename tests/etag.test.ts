@@ -98,6 +98,17 @@ describe("Collection auto-attaches If-Match", () => {
     expect(client.etags.get("posts", "p1")).toBe(`W/"43"`);
   });
 
+  it("create sends idempotencyKey as X-VB-Idempotency-Key, and no header without it", async () => {
+    const { client, calls } = makeClient(() => new Response(JSON.stringify({ data: { id: "p1" } }), {
+      headers: { "content-type": "application/json" },
+    }));
+    const col = new Collection(client, "posts");
+    await col.create({ title: "a" }, { idempotencyKey: "order-42" });
+    await col.create({ title: "b" });
+    expect(calls[0]?.headers["X-VB-Idempotency-Key"]).toBe("order-42");
+    expect(calls[1]?.headers["X-VB-Idempotency-Key"]).toBeUndefined();
+  });
+
   it("ifMatch=false skips the precondition", async () => {
     const { client, calls } = makeClient(() => new Response(JSON.stringify({ data: {} }), {
       headers: { "content-type": "application/json" },

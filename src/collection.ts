@@ -31,6 +31,18 @@ export interface GetOptions<P extends ViewParams = ViewParams> extends MutationO
   exclude?: string;
 }
 
+/** Options for `create`. */
+export interface CreateOptions extends MutationOptions {
+  /**
+   * Makes the create safe to repeat (server 0.46+): sent as
+   * `X-VB-Idempotency-Key`. The same key again, from the same caller on the
+   * same collection, returns the record the first call made instead of
+   * making another. Use a fresh random value per record, such as
+   * `crypto.randomUUID()`, and keep it with the pending create until it
+   * succeeds. An older server ignores it.
+   */
+  idempotencyKey?: string;
+}
 export type UpdateOptions = MutationOptions & ConcurrencyOptions;
 export type DeleteOptions = MutationOptions & ConcurrencyOptions;
 
@@ -111,11 +123,13 @@ export class Collection<
     return await this.client.request<R>(`/api/v1/${this.encName()}/${enc(id)}`, { query, ...rest });
   }
 
-  async create(body: C, opts: MutationOptions = {}): Promise<R> {
+  async create(body: C, opts: CreateOptions = {}): Promise<R> {
+    const { idempotencyKey, ...rest } = opts;
     return await this.client.request<R>(`/api/v1/${this.encName()}`, {
       method: "POST",
       body,
-      ...opts,
+      ...rest,
+      ...(idempotencyKey ? { headers: { "X-VB-Idempotency-Key": idempotencyKey } } : {}),
     });
   }
 
