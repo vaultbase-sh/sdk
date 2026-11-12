@@ -88,6 +88,23 @@ describe("migrate API", () => {
     expect(r.skipped).toEqual(["a"]);
   });
 
+  it("applySnapshot returns the report of a failed apply (422 since server 0.46)", async () => {
+    const fetch = mockFetch(() => new Response(JSON.stringify({
+      error: "1 collection failed to apply: b", code: 422,
+      data: { created: ["a"], updated: [], skipped: [], errors: [{ collection: "b", error: "index (x): Field 'x' not found on 'b'" }] },
+    }), { status: 422, headers: { "content-type": "application/json" } }));
+    const r = await applySnapshot(sampleSnapshot, { url: "https://x", adminToken: "t", fetch });
+    expect(r.created).toEqual(["a"]);
+    expect(r.errors).toEqual([{ collection: "b", message: "index (x): Field 'x' not found on 'b'" }]);
+  });
+
+  it("applySnapshot throws on a failure that has no report, with the server's reason", async () => {
+    const bad = mockFetch(() => new Response(JSON.stringify({ error: "mode must be 'additive' or 'sync'", code: 422 }), { status: 422, statusText: "Unprocessable Entity" }));
+    await expect(applySnapshot(sampleSnapshot, { url: "https://x", adminToken: "t", fetch: bad })).rejects.toThrow("apply failed: 422 Unprocessable Entity: mode must be 'additive' or 'sync'");
+    const denied = mockFetch(() => new Response("nope", { status: 403, statusText: "Forbidden" }));
+    await expect(applySnapshot(sampleSnapshot, { url: "https://x", adminToken: "t", fetch: denied })).rejects.toThrow("apply failed: 403 Forbidden");
+  });
+
   it("applySnapshot defaults to additive mode", async () => {
     let sentMode: string | undefined;
     const fetch = mockFetch((_url, init) => {

@@ -103,8 +103,16 @@ export async function applySnapshot(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ snapshot, mode: opts.mode ?? "additive" }),
   });
-  if (!res.ok) throw new Error(`apply failed: ${res.status} ${res.statusText}`);
-  const r = (unwrap(await res.json()) ?? {}) as Partial<Omit<ApplyResult, "errors">> & { errors?: Array<{ collection: string; message?: string; error?: string }> };
+  // Since server 0.46 a failed apply answers 422 with the same report under
+  // `data` (before, 200). Any other failure has no report to return.
+  let json: unknown = null;
+  if (res.ok || res.status === 422) json = await res.json().catch(() => null);
+  const report = json && typeof json === "object" && "data" in json ? (json as { data: unknown }).data : null;
+  if (!res.ok && !(report && typeof report === "object" && Array.isArray((report as { errors?: unknown }).errors))) {
+    const reason = json && typeof json === "object" && typeof (json as { error?: unknown }).error === "string" ? `: ${(json as { error: string }).error}` : "";
+    throw new Error(`apply failed: ${res.status} ${res.statusText}${reason}`);
+  }
+  const r = (unwrap(json) ?? {}) as Partial<Omit<ApplyResult, "errors">> & { errors?: Array<{ collection: string; message?: string; error?: string }> };
   return {
     created: r.created ?? [],
     updated: r.updated ?? [],
