@@ -235,6 +235,28 @@ try {
 A successful `delete` clears the cached entry so a subsequent re-create
 doesn't carry the stale tag forward.
 
+## Your own id and safe retries (server 0.46+)
+
+A create keeps an `id` you send, as long as it is a UUID nobody has used:
+
+```ts
+await vb.collection("posts").create({ id: crypto.randomUUID(), title: "Hello" });
+// a taken id rejects with kind "conflict" (409); a non-UUID with "validation" (422)
+```
+
+To repeat a create after a timeout or a dropped connection without making a
+second record, send an idempotency key:
+
+```ts
+const key = crypto.randomUUID();            // keep it until the create succeeds
+const post = await vb.collection("posts").create(data, { idempotencyKey: key });
+// The same call again, with the same key, returns the same record.
+```
+
+The server keeps a key for 24 hours, per collection and caller. The same key
+with a different body rejects with `validation` (422). A server before 0.46
+ignores the key.
+
 ## Codegen — `vb-types`
 
 Snapshot mode (recommended):
@@ -296,6 +318,11 @@ if (diff.some((d) => d.kind !== "unchanged")) {
   await applySnapshot(snap, { url: targetUrl, adminToken, mode: "sync" });
 }
 ```
+
+`applySnapshot` returns `{ created, updated, skipped, errors }`. When a
+collection failed to apply, `errors` names it; server 0.46+ answers `422` for
+that case and the report is returned all the same. `vb-migrate apply` exits
+with 1.
 
 ## Auth stores
 
